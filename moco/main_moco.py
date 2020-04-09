@@ -38,6 +38,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet50)')
+
 parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
@@ -49,6 +50,8 @@ parser.add_argument('-b', '--batch-size', default=256, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
+parser.add_argument('--checkpoint_fp', default='/userdata/smetzger/all_deepul_files/ckpts', type=str,
+                     help='where to store checkpointed models')
 parser.add_argument('--lr', '--learning-rate', default=0.03, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--schedule', default=[120, 160], nargs='*', type=int,
@@ -123,11 +126,11 @@ def main():
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
-    print('here')
+    # print('here')
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
-    print('ngpus_per_node', ngpus_per_node)
+    # print('ngpus_per_node', ngpus_per_node)
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -255,7 +258,9 @@ def main_worker(gpu, ngpus_per_node, args):
     # train_dataset = datasets.ImageFolder(
     #     traindir,
     #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
-    train_dataset = torchvision.datasets.CIFAR10('/userdata/smetzger/data/cifar_10',
+
+    # my traindir: '/userdata/smetzger/data/cifar_10'
+    train_dataset = torchvision.datasets.CIFAR10(traindir,
      transform=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)),
      download=True)
     # train_dataset = datasets.CIFAR10(traindir, transform=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
@@ -277,14 +282,14 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-    if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-            and args.rank % ngpus_per_node == 0):
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'optimizer' : optimizer.state_dict(),
-        }, is_best=False, filename='/userdata/smetzger/all_deepul_files/ckpts/checkpoint_{:04d}.pth.tar'.format(epoch))
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0):
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+            }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
