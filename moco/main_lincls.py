@@ -8,6 +8,7 @@ import shutil
 import time
 import warnings
 
+import torchvision
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -149,6 +150,9 @@ def main_worker(gpu, ngpus_per_node, args):
         if name not in ['fc.weight', 'fc.bias']:
             param.requires_grad = False
     # init the fc layer
+    print('before change', model.fc)
+    model.fc = torch.nn.Linear(model.fc.in_features, 10)
+    print(model.fc)
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
 
@@ -245,14 +249,45 @@ def main_worker(gpu, ngpus_per_node, args):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
+    # train_dataset = datasets.ImageFolder(
+    #     traindir,
+    #     transforms.Compose([
+    #         transforms.RandomResizedCrop(224),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize,
+        # ]))
+
+    # train_dataset = torchvision.datasets.CIFAR10(traindir,
+    #     transform= transforms.Compose([
+    #         transforms.RandomResizedCrop(224),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         normalize,
+    #     ]), download=False)
+
+    # val_dataset = torchvision.datasets.CIFAR10(traindir, 
+    #     transform= transforms.Compose([
+    #     transforms.RandomResizedCrop(224),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.ToTensor(),
+    #     normalize,
+    #     ]),
+    #     download=True, train=False)
+
+    # removed flips. 
+    train_dataset = torchvision.datasets.CIFAR10(traindir,
+        transform= transforms.Compose([
             transforms.ToTensor(),
             normalize,
-        ]))
+        ]), download=False)
+
+    val_dataset = torchvision.datasets.CIFAR10(traindir, 
+        transform= transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+        ]),
+        download=True, train=False)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -264,12 +299,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
@@ -336,6 +366,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         # compute output
         output = model(images)
+        print('output shape', output.shape)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
