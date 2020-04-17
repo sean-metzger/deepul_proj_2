@@ -3,6 +3,7 @@
 import argparse
 import builtins
 import math
+import string
 import os
 import random
 import shutil
@@ -30,8 +31,29 @@ model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR',
+
+# ONLINE LOGGING
+import wandb
+
+
+parser = argparse.ArgumentParser(description='PyTorch SSL Training')
+
+#########
+# WANDB #
+#########
+parser.add_argument('--notes', type=str, default='', help='wandb notes')
+default_id = ''.join([random.choice(string.ascii_letters + string.digits) for n in range(32)])
+parser.add_argument('--name', type=str, default=default_id, help='wandb id/name')
+parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
+parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
+
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
+
+
+################
+# ORIGNAL ARGS #
+################
+parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     choices=model_names,
@@ -102,13 +124,10 @@ parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
 
-print('avail', torch.cuda.is_available())
 ngpus_per_node = torch.cuda.device_count()
-print('ngpus_per_node', ngpus_per_node)
+
 def main():
     args = parser.parse_args()
-    print('args', args)
-
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -126,11 +145,9 @@ def main():
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
-    # print('here')
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
-    # print('ngpus_per_node', ngpus_per_node)
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -166,7 +183,6 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
     # create model
-    print("=> creating model '{}'".format(args.arch))
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
@@ -220,6 +236,7 @@ def main_worker(gpu, ngpus_per_node, args):
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
+            # TODO(pr) resume the wandb training as well
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -228,7 +245,6 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     if args.aug_plus:
@@ -248,22 +264,25 @@ def main_worker(gpu, ngpus_per_node, args):
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
             transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            # transforms.RandomGrayscale(p=0.2),
-            # transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-            # transforms.RandomHorizontalFlip(),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize
         ]
 
-    # train_dataset = datasets.ImageFolder(
-    #     traindir,
-    #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
-
-    # my traindir: '/userdata/smetzger/data/cifar_10'
-    train_dataset = torchvision.datasets.CIFAR10(traindir,
-     transform=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)),
-     download=True)
-    # train_dataset = datasets.CIFAR10(traindir, transform=moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+    
+    transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
+    if args.dataid == "imagenet":
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            transformations)
+    elif args.dataid == "cifar10":
+        train_dataset = torchvision.datasets.CIFAR10(args.data,
+                                                     transform=transformations,
+                                                     download=True)
+    else:
+        raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -274,6 +293,13 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    # CR: only the master will report to wandb for now
+    if not args.multiprocessing_distributed or args.gpu == 0:
+        wandb.init(project=args.wandbproj,
+               name=args.name, id=args.id, resume=args.resume,
+               config=args.__dict__, notes=args.notes)
+
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -282,6 +308,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
+    # TODO(pr) reduce the amount of saving
     if not args.multiprocessing_distributed or (args.multiprocessing_distributed
             and args.rank % ngpus_per_node == 0):
         save_checkpoint({
@@ -299,6 +326,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
+        args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
@@ -370,15 +398,18 @@ class AverageMeter(object):
 
 
 class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix=""):
+    def __init__(self, main_node, num_batches, meters, prefix=""):
         self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
         self.meters = meters
         self.prefix = prefix
+        self.main_node = main_node
 
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         print('\t'.join(entries))
+        if self.main_node:
+            wandb.log({meter: self.meters[meter] for meter in self.meters})
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
