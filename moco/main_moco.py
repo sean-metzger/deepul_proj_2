@@ -409,7 +409,7 @@ class ProgressMeter(object):
         entries += [str(meter) for meter in self.meters]
         print('\t'.join(entries))
         if self.main_node:
-            wandb.log({meter: self.meters[meter] for meter in self.meters})
+            wandb.log({"meter": self.meters[meter].avg for meter in self.meters})
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
