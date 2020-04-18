@@ -48,6 +48,8 @@ parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
 parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
+parser.add_argument('--checkpoint-interval', default=50, type=int,
+                    help='how often to checkpoint')
 
 
 ################
@@ -308,15 +310,15 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-    # TODO(pr) reduce the amount of saving
-    if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-            and args.rank % ngpus_per_node == 0):
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'optimizer' : optimizer.state_dict(),
-        }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch))
+        # TODO(cjed) also checkpoint the current epoch?
+        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0)):
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+            }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):

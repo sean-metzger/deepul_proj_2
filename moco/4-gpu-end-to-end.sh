@@ -12,4 +12,5 @@ CHECKPOINT_DIR=$1
 DATA_DIR=$2
 NOTES=$3
 
-python main_moco.py -a resnet50 --lr 0.015  --batch-size 128 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1 --rank 0 --mlp --epochs 100 --checkpoint_fp ${CHECKPOINT_DIR} --data ${DATA_DIR} --notes "${NOTES}"
+# moco v2
+python main_moco.py -a resnet50 --lr 0.015  --batch-size 128 --dist-url 'tcp://localhost:10002' --multiprocessing-distributed --world-size 1 --rank 0 --mlp --epochs 400 --checkpoint_fp ${CHECKPOINT_DIR} --data ${DATA_DIR} --notes "${NOTES}" --aug-plus --cos --moco-t 0.2

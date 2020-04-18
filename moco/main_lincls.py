@@ -2,6 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import argparse
 import builtins
+import string
 import os
 import random
 import shutil
@@ -22,12 +23,33 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
+
+# ONLINE LOGGING
+import wandb
+
+
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR',
+
+
+#########
+# WANDB #
+#########
+parser.add_argument('--notes', type=str, default='', help='wandb notes')
+default_id = ''.join([random.choice(string.ascii_letters + string.digits) for n in range(32)])
+parser.add_argument('--name', type=str, default=default_id, help='wandb id/name')
+parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
+parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
+
+parser.add_argument('--checkpoint-interval', default=50, type=int,
+                    help='how often to checkpoint')
+parser.add_argument('--checkpoint_fp', type=str, default=default_id, help='where to store checkpoint')
+
+
+parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     choices=model_names,
@@ -244,8 +266,6 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -276,13 +296,13 @@ def main_worker(gpu, ngpus_per_node, args):
     #     download=True, train=False)
 
     # removed flips. 
-    train_dataset = torchvision.datasets.CIFAR10(traindir,
+    train_dataset = torchvision.datasets.CIFAR10(args.data,
         transform= transforms.Compose([
             transforms.ToTensor(),
             normalize,
         ]), download=False)
 
-    val_dataset = torchvision.datasets.CIFAR10(traindir, 
+    val_dataset = torchvision.datasets.CIFAR10(args.data, 
         transform= transforms.Compose([
         transforms.ToTensor(),
         normalize,
@@ -294,6 +314,15 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         train_sampler = None
 
+    # CR: only the master will report to wandb for now
+    is_main_node = not args.multiprocessing_distributed or args.gpu == 0
+    if is_main_node:
+        wandb.init(project=args.wandbproj,
+                   name=args.name, id=args.id, resume=args.resume,
+                   config=args.__dict__, notes=args.notes, job_type='linclass')
+
+        
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
@@ -304,7 +333,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, model, criterion, args, is_main_node)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -313,35 +342,50 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, epoch, args, is_main_node)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
-
+        if is_main_node:
+            wandb.log({"val-acc1": acc1})
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
-
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
+        if is_best:
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer' : optimizer.state_dict(),                
+            },
+                            is_best,
+                            filename= args.checkpoint_fp + 'checkpoint_best.pth.tar'.format(epoch)                
+)
+            
+        
+        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0)):
             save_checkpoint({
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
-            }, is_best)
+            }, is_best, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch)                
+)
             if epoch == args.start_epoch:
                 sanity_check(model.state_dict(), args.pretrained)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    losses = AverageMeter('LinCls Loss', ':.4e')
+    top1 = AverageMeter('LinCls Acc@1', ':6.2f')
+    top5 = AverageMeter('LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
+        is_main_node,
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
@@ -366,7 +410,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         # compute output
         output = model(images)
-        print('output shape', output.shape)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -388,12 +431,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             progress.display(i)
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, args, is_main_node=False):
     batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    losses = AverageMeter('Val Loss', ':.4e')
+    top1 = AverageMeter('Val Acc@1', ':6.2f')
+    top5 = AverageMeter('Val Acc@5', ':6.2f')
     progress = ProgressMeter(
+        is_main_node,
         len(val_loader),
         [batch_time, losses, top1, top5],
         prefix='Test: ')
@@ -487,21 +531,23 @@ class AverageMeter(object):
 
 
 class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix=""):
+    def __init__(self, main_node, num_batches, meters, prefix=""):
         self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
         self.meters = meters
         self.prefix = prefix
+        self.main_node = main_node
 
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         print('\t'.join(entries))
+        if self.main_node:
+            wandb.log({meter.name: meter.avg for meter in self.meters})
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Decay the learning rate based on schedule"""
