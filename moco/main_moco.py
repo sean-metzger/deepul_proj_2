@@ -24,6 +24,8 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
+import slm_utils.get_faa_transforms
+
 import moco.loader
 import moco.builder
 
@@ -117,6 +119,7 @@ parser.add_argument('--moco-m', default=0.999, type=float,
 parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
+
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
@@ -124,6 +127,15 @@ parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
+# Fast AutoAugment Args. 
+parser.add_argument('--faa_aug', action='store_true',
+                    help='use FastAutoAugment CIFAR10 augmentations')
+parser.add_argument('--randomcrop', action='store_true', 
+                    help='use the random crop instead of randomresized crop, for FAA augmentations')
+
+
+
+
 
 
 ngpus_per_node = torch.cuda.device_count()
@@ -187,8 +199,11 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
+        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp, args.dataid)
+
     print(model)
+
+
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -247,12 +262,29 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+
+    # Set up crops and normalization depending on the dataset. 
+
+    # Cifar 10 crops and normalization. 
+    if args.dataid == "cifar10": 
+        _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+        normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
+        if not args.randomcrop:
+            random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+        else: 
+            # Use the crop they were using in Fast AutoAugment. 
+            random_resized_crop = transforms.RandomCrop(32, padding=4)
+
+    # Use the imagenet parameters. 
+    else: 
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
+        random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
+        
     if args.aug_plus:
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            random_resized_crop,
             transforms.RandomApply([
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
             ], p=0.8),
@@ -262,10 +294,14 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
+
+    elif args.faa_aug: 
+        augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop)
+
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            random_resized_crop,
             transforms.RandomGrayscale(p=0.2),
             transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
             transforms.RandomHorizontalFlip(),
@@ -273,8 +309,11 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    
-    transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
+    if not args.faa_aug: 
+        transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
+    else: 
+        transformations = moco.loader.TwoCropsTransform(augmentation)
+
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
             traindir,
@@ -318,7 +357,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch))
+            }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):

@@ -49,6 +49,8 @@ parser.add_argument('--checkpoint-interval', default=50, type=int,
 parser.add_argument('--checkpoint_fp', type=str, default=default_id, help='where to store checkpoint')
 
 
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
+
 parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
@@ -99,6 +101,13 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+
+
+parser.add_argument('--faa_aug', action='store_true',
+                    help='use FastAutoAugment CIFAR10 augmentations')
+
+parser.add_argument('--randomcrop', action='store_true', 
+                    help='use the random crop instead of randomresized crop, for FAA augmentations')
 
 parser.add_argument('--pretrained', default='', type=str,
                     help='path to moco pretrained checkpoint')
@@ -173,7 +182,7 @@ def main_worker(gpu, ngpus_per_node, args):
             param.requires_grad = False
     # init the fc layer
     print('before change', model.fc)
-    model.fc = torch.nn.Linear(model.fc.in_features, 10)
+    model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10. 
     print(model.fc)
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
@@ -266,8 +275,21 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+
+
+    # Chanigng this for CIFAR10. 
+
+    if args.dataid =="cifar10": 
+
+        _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+        normalize = transforms.Normalize(mean=_CIFAR_MEAN
+                                     std=_CIFAR_STD)
+
+
+    #  Original normalization 
+    else: 
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
 
     # train_dataset = datasets.ImageFolder(
     #     traindir,
@@ -296,14 +318,34 @@ def main_worker(gpu, ngpus_per_node, args):
     #     download=True, train=False)
 
     # removed flips. 
+
+    # Readded some data augmentations for training this part. 
+
+    if args.dataid == "cifar10": 
+        crop_size = 28
+        orig_size = 32
+    else: 
+        orig_size = 256
+        crop_size = 224
+
+    if not args.randomcrop: 
+        crop_transform = transforms.RandomResizedCrop(crop_size)
+    else: 
+        crop_transform = transforms.RandomCrop(32, padding=4)
+        crop_size=32
+
     train_dataset = torchvision.datasets.CIFAR10(args.data,
         transform= transforms.Compose([
+            crop_transform,
+            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
         ]), download=False)
 
     val_dataset = torchvision.datasets.CIFAR10(args.data, 
         transform= transforms.Compose([
+        transforms.Resize(orig_size),
+        transforms.CenterCrop(crop_size),
         transforms.ToTensor(),
         normalize,
         ]),
