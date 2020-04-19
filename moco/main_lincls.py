@@ -102,10 +102,6 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 
-
-parser.add_argument('--faa_aug', action='store_true',
-                    help='use FastAutoAugment CIFAR10 augmentations')
-
 parser.add_argument('--randomcrop', action='store_true', 
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
@@ -117,6 +113,8 @@ best_acc1 = 0
 
 def main():
     args = parser.parse_args()
+
+    print(args)
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -178,7 +176,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # CIFAR 10 mod 
 
-    if dataid =="cifar10": 
+    if args.dataid =="cifar10": 
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
         model.maxpool = nn.Identity()
@@ -188,9 +186,13 @@ def main_worker(gpu, ngpus_per_node, args):
         if name not in ['fc.weight', 'fc.bias']:
             param.requires_grad = False
     # init the fc layer
-    print('before change', model.fc)
-    model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10. 
-    print(model.fc)
+
+    if args.dataid == "cifar10":
+        print('before change', model.fc)
+        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10. 
+        print(model.fc)
+
+    # Initialize the weights and biases in the way they did in the paper. 
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
 
@@ -289,8 +291,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataid =="cifar10": 
 
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-        normalize = transforms.Normalize(mean=_CIFAR_MEAN
-                                     std=_CIFAR_STD)
+        normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
 
 
     #  Original normalization 
@@ -386,6 +387,9 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     for epoch in range(args.start_epoch, args.epochs):
+
+        print(epoch)
+
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
@@ -393,45 +397,47 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args, is_main_node)
 
+
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
             wandb.log({"val-acc1": acc1})
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
-        if is_best:
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),                
-            },
-                            is_best,
-                            filename= args.checkpoint_fp + 'checkpoint_best.pth.tar'.format(epoch)                
-)
+#         is_best = acc1 > best_acc1
+#         best_acc1 = max(acc1, best_acc1)
+#         if is_best:
+#             save_checkpoint({
+#                 'epoch': epoch + 1,
+#                 'arch': args.arch,
+#                 'state_dict': model.state_dict(),
+#                 'best_acc1': best_acc1,
+#                 'optimizer' : optimizer.state_dict(),                
+#             },
+#                             is_best,
+#                             filename= args.checkpoint_fp + 'checkpoint_best.pth.tar'.format(epoch)                
+# )
             
         
-        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0)):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),
-            }, is_best, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch)                
-)
-            if epoch == args.start_epoch:
-                sanity_check(model.state_dict(), args.pretrained)
+#         if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
+#                 and args.rank % ngpus_per_node == 0)):
+#             save_checkpoint({
+#                 'epoch': epoch + 1,
+#                 'arch': args.arch,
+#                 'state_dict': model.state_dict(),
+#                 'best_acc1': best_acc1,
+#                 'optimizer' : optimizer.state_dict(),
+#             }, is_best, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch)                
+# )
+            # if epoch == args.start_epoch:
+            #     print(args.pretrained)
+            #     sanity_check(model.state_dict(), args.pretrained)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('LinCls Loss', ':.4e')
-    top1 = AverageMeter('LinCls Acc@1', ':6.2f')
+    top1 = AverageMeter('LinCls Acc@1', ':6.2f') 
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
