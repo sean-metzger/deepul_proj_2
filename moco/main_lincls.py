@@ -176,6 +176,13 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch]()
 
+    # CIFAR 10 mod 
+
+    if dataid =="cifar10": 
+    # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
+        model.maxpool = nn.Identity()
+
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
         if name not in ['fc.weight', 'fc.bias']:
