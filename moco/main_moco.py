@@ -374,6 +374,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
                 'id': args.id,
+                'name': CHECKPOINT_ID,
             }, cp_fullpath)
             if epoch == args.epochs - 1:
                 print("Saving final results to wandb")

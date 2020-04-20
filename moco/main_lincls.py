@@ -198,6 +198,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # load from pre-trained, before DistributedDataParallel constructor
     wandb_resume = args.resume
+    name = args.id
     if args.pretrained:
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
@@ -208,7 +209,10 @@ def main_worker(gpu, ngpus_per_node, args):
             if checkpoint.get('id'):
                 # sync the ids for wandb
                 args.id = checkpoint['id']
+                name = args.id
                 wandb_resume = True
+            if checkpoint.get('name'):
+                name = checkpoint['name']
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
                 if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
@@ -372,6 +376,7 @@ def main_worker(gpu, ngpus_per_node, args):
     is_main_node = not args.multiprocessing_distributed or args.gpu == 0
     if is_main_node:
         wandb.init(project=args.wandbproj,
+                   name=name,
                    id=args.id, resume=wandb_resume,
                    config=args.__dict__, notes=args.notes, job_type='linclass')
 
