@@ -162,6 +162,8 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+
+    # set the checkpoint id    
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -176,6 +178,19 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
+    CHECKPOINT_ID = "{}_{}_{}epochs_{}bsz_{:0.4f}lr_{:0.4f}mtm_{}sched_{:0.4f}mocod_{}mocok_{:0.4f}mocom_{:0.4f}mocot_{:0.3e}wd" \
+        .format(args.id[:5], args.arch, args.epochs, args.batch_size, args.lr, args.momentum, "-".join([str(x) for x in args.schedule]), args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.weight_decay)
+    if args.mlp:
+        CHECKPOINT_ID += "_mlp"
+    if args.aug_plus:
+        CHECKPOINT_ID += "_augplus"
+    if args.cos:
+        CHECKPOINT_ID += "_cos"
+    if args.faa_aug:
+        CHECKPOINT_ID += "_faa"
+    if args.randomcrop:
+        CHECKPOINT_ID += "_randcrop"
+
     args.gpu = gpu
 
     # suppress printing if not master
@@ -297,7 +312,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop)
-
+        transformations = moco.loader.TwoCropsTransform(augmentation)
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -311,8 +326,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if not args.faa_aug: 
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
-    else: 
-        transformations = moco.loader.TwoCropsTransform(augmentation)
+        
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
@@ -337,7 +351,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.gpu == 0:
         wandb.init(project=args.wandbproj,
-               name=args.name, id=args.id, resume=args.resume,
+               name=CHECKPOINT_ID, id=args.id, resume=args.resume,
                config=args.__dict__, notes=args.notes)
 
 
@@ -347,20 +361,28 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
-        # TODO(cjed) also checkpoint the current epoch?
-        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0)):
-            save_checkpoint({
+        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
+           and (not args.multiprocessing_distributed or
+                (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)):
+            cp_filename = "{}_{:04d}.tar".format(CHECKPOINT_ID, epoch)
+            cp_fullpath = os.path.join(args.checkpoint_fp, cp_filename)
+            torch.save({
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename= args.checkpoint_fp + 'checkpoint_{:04d}.tar'.format(epoch))
+                'id': args.id,
+            }, cp_fullpath)
+            if epoch == args.epochs - 1:
+                print("Saving final results to wandb")
+                wandb.save(cp_fullpath)
+
+    print("Done - wrapping up")
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -370,7 +392,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+        prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
 
     # switch to train mode
     model.train()
@@ -407,11 +429,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         if i % args.print_freq == 0:
             progress.display(i)
 
-
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
 
 
 class AverageMeter(object):

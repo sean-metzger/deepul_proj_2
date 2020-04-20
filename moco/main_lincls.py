@@ -46,7 +46,7 @@ parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb pro
 
 parser.add_argument('--checkpoint-interval', default=50, type=int,
                     help='how often to checkpoint')
-parser.add_argument('--checkpoint_fp', type=str, default=default_id, help='where to store checkpoint')
+parser.add_argument('--checkpoint_fp', type=str, default='checkpoints/', help='where to store checkpoint')
 
 
 parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
@@ -197,6 +197,7 @@ def main_worker(gpu, ngpus_per_node, args):
     model.fc.bias.data.zero_()
 
     # load from pre-trained, before DistributedDataParallel constructor
+    wandb_resume = args.resume
     if args.pretrained:
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
@@ -204,6 +205,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
             # rename moco pre-trained keys
             state_dict = checkpoint['state_dict']
+            if checkpoint.get('id'):
+                # sync the ids for wandb
+                args.id = checkpoint['id']
+                wandb_resume = True
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
                 if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
@@ -289,7 +294,6 @@ def main_worker(gpu, ngpus_per_node, args):
     # Chanigng this for CIFAR10. 
 
     if args.dataid =="cifar10": 
-
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
 
@@ -368,7 +372,7 @@ def main_worker(gpu, ngpus_per_node, args):
     is_main_node = not args.multiprocessing_distributed or args.gpu == 0
     if is_main_node:
         wandb.init(project=args.wandbproj,
-                   name=args.name, id=args.id, resume=args.resume,
+                   id=args.id, resume=wandb_resume,
                    config=args.__dict__, notes=args.notes, job_type='linclass')
 
         
@@ -395,47 +399,32 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args, is_main_node)
+        train(train_loader, model, criterion, optimizer, epoch, args, is_main_node, args.id[:5])
 
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
             wandb.log({"val-acc1": acc1})
-        # remember best acc@1 and save checkpoint
-#         is_best = acc1 > best_acc1
-#         best_acc1 = max(acc1, best_acc1)
-#         if is_best:
-#             save_checkpoint({
-#                 'epoch': epoch + 1,
-#                 'arch': args.arch,
-#                 'state_dict': model.state_dict(),
-#                 'best_acc1': best_acc1,
-#                 'optimizer' : optimizer.state_dict(),                
-#             },
-#                             is_best,
-#                             filename= args.checkpoint_fp + 'checkpoint_best.pth.tar'.format(epoch)                
-# )
             
-        
-#         if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
-#                 and args.rank % ngpus_per_node == 0)):
-#             save_checkpoint({
-#                 'epoch': epoch + 1,
-#                 'arch': args.arch,
-#                 'state_dict': model.state_dict(),
-#                 'best_acc1': best_acc1,
-#                 'optimizer' : optimizer.state_dict(),
-#             }, is_best, filename= args.checkpoint_fp + 'checkpoint_{:04d}.pth.tar'.format(epoch)                
-# )
-            # if epoch == args.start_epoch:
-            #     print(args.pretrained)
-            #     sanity_check(model.state_dict(), args.pretrained)
+        # remember best acc@1 and save checkpoint
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
+            is_best = acc1 > best_acc1
+            best_acc1 = max(acc1, best_acc1)
+            if is_best:
+                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best.tar".format(args.id[:5]))
+                torch.save({
+                    'epoch': epoch + 1,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'best_acc1': best_acc1,
+                    'optimizer' : optimizer.state_dict(),                
+                }, savefile)
+                wandb.save(savefile)
 
-
-def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False):
-    batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
+def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
+    batch_time = AverageMeter('LinCls Time', ':6.3f')
+    data_time = AverageMeter('LinCls Data', ':6.3f')
     losses = AverageMeter('LinCls Loss', ':.4e')
     top1 = AverageMeter('LinCls Acc@1', ':6.2f') 
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
@@ -443,7 +432,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
         is_main_node,
         len(train_loader),
         [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+        prefix="{} LinClass Epoch: [{}]".format(runid, epoch))
 
     """
     Switch to eval mode:
@@ -529,12 +518,6 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
               .format(top1=top1, top5=top5))
 
     return top1.avg
-
-
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
 
 
 def sanity_check(state_dict, pretrained_weights):
