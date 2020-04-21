@@ -152,6 +152,8 @@ class MoCo(nn.Module):
     def forward(self, head, im_q, im_k=None):
         if head=="moco":
             return self.moco_forward(im_q, im_k)
+        elif head=="rotnet":
+            return self.model[head](self.model["encoder"](im_q))
         else:
             raise NotImplementedError("The following head has not been implemented: {}".forward(head))
         

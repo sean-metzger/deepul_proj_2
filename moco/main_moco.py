@@ -253,7 +253,7 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         # comment out the following line for debugging
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        # raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
         # AllGather implementation (batch shuffle, queue update, etc.) in
         # this code only supports DistributedDataParallel.
@@ -262,6 +262,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
+    # TODO(pr) should each head have its own optimizer
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -279,7 +280,8 @@ def main_worker(gpu, ngpus_per_node, args):
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            # TODO(pr) resume the wandb training as well
+            args.id=checkpoint['id']
+            args.id=checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -398,6 +400,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
+    rot_losses = AverageMeter('Rot Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
@@ -418,12 +421,35 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
+        
         # compute output
-
         if args.rotnet:
-            # TODO we have to apply all the rotations here somehow and create the expected target
-            # can we map this though another dataloader
-            output, target = model(head="rotnet", im_q=images[0])
+            use_images = images[0]
+            nimages = use_images.shape[0]
+
+            # rotate the images randomly
+            rot_classes = torch.randint(4, [nimages])
+            rotated_images = torch.zeros_like(use_images)
+            rotated_images[rot_classes==0] = use_images[rot_classes==0]
+            # rotate 90
+            rotated_images[rot_classes==1] = use_images[rot_classes==1].flip(3).transpose(2,3)
+            # rotate 180
+            rotated_images[rot_classes==2] = use_images[rot_classes==2].flip(3).flip(2)
+            # rotate 270
+            rotated_images[rot_classes==3] = use_images[rot_classes==3].transpose(2,3).flip(3)
+
+            if i == 0:
+                eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
+                eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
+                wandb.log({"example rotated image": [eximg0, eximg1]})
+            output = model(head="rotnet", im_q=images[0])
+            loss = criterion(output, targets)
+
+            rot_losses.update(loss.item(), images[0].size(0))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
         if not args.nomoco:
             output, target = model(head="moco", im_q=images[0], im_k=images[1])
             loss = criterion(output, target)
