@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import torch
 import torch.nn as nn
+from itertools import chain
 
 
 class MoCo(nn.Module):
@@ -8,9 +9,8 @@ class MoCo(nn.Module):
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=128, K=65536, m=0.999, T=0.07, mlp=False, dataid="cifar10"):
+    def __init__(self, base_encoder, K=65536, m=0.999, T=0.07, mlp=False, dataid="cifar10", multitask_heads={}):
         """
-        dim: feature dimension (default: 128)
         K: queue size; number of negative keys (default: 65536)
         m: moco momentum of updating key encoder (default: 0.999)
         T: softmax temperature (default: 0.07)
@@ -21,40 +21,69 @@ class MoCo(nn.Module):
         self.m = m
         self.T = T
 
+        
         # create the encoders
-        # num_classes is the output fc dimension
-        self.encoder_q = base_encoder(num_classes=dim)
-        self.encoder_k = base_encoder(num_classes=dim)
+        # num_classes does not matter here
+        encoder = base_encoder(num_classes=128)
 
         if dataid =="cifar10": 
             # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
-            self.encoder_q.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
-            self.encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
+            encoder.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
             # Get rid of maxpool, as in SIMCLR cifar10 experiments. 
-            self.encoder_q.maxpool = nn.Identity()
-            self.encoder_k.maxpool = nn.Identity()
+            encoder.maxpool = nn.Identity()
 
-        if mlp:  # hack: brute-force replacement
-            dim_mlp = self.encoder_q.fc.weight.shape[1]
-            self.encoder_q.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_q.fc)
-            self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_k.fc)
+        # what dimension should we make the heads?
+        dim_mlp = encoder.fc.weight.shape[1]
 
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
-            param_k.data.copy_(param_q.data)  # initialize
-            param_k.requires_grad = False  # not update by gradient
+        # hack to "remove" the fc layer
+        encoder.fc = nn.Identity()
+        modules = {
+            # pop off the final fc layer and store the shared encoder
+            "encoder": encoder,
+        }
 
-        # create the queue
-        self.register_buffer("queue", torch.randn(dim, K))
-        self.queue = nn.functional.normalize(self.queue, dim=0)
+        # Multitask is easy: we just need lots of [mlp/linear] heads
+        for mt in multitask_heads.keys():
+            fc = nn.Linear(dim_mlp, multitask_heads[mt]["num_classes"])
+            if mlp:
+                fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), fc)
+            modules[mt] = fc
+            
+        self.model = nn.ModuleDict(modules)
 
-        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+        # Treat moco special, since it needs the key model
+        if "moco" in multitask_heads:
+            mocodim=multitask_heads["moco"]["num_classes"]
+            self.encoder_k = base_encoder(num_classes=mocodim)
+
+            # now apply the same encoder updates
+            if mlp:
+                self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_k.fc)
+                
+            if dataid=="cifar10":
+                self.encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
+                self.encoder_k.maxpool = nn.Identity()
+                
+            # set the params to be the same starting values    
+            for param_q, param_k in zip(self._get_moco_params(), self.encoder_k.parameters()):
+                param_k.data.copy_(param_q.data)  
+                param_k.requires_grad = False  # not update by gradient, update by momentum technique
+
+            # create the moco queue
+            self.register_buffer("queue", torch.randn(mocodim, K))
+            self.queue = nn.functional.normalize(self.queue, dim=0)
+            self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+
+
+    def _get_moco_params(self):
+        return chain(self.model["encoder"].parameters(), self.model["moco"].parameters())
 
     @torch.no_grad()
     def _momentum_update_key_encoder(self):
         """
         Momentum update of the key encoder
         """
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+        for param_q, param_k in zip(self._get_moco_params(), self.encoder_k.parameters()):
             param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
 
     @torch.no_grad()
@@ -120,7 +149,14 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, im_q, im_k):
+    def forward(self, head, im_q, im_k=None):
+        if head=="moco":
+            return self.moco_forward(im_q, im_k)
+        else:
+            raise NotImplementedError("The following head has not been implemented: {}".forward(head))
+        
+    
+    def moco_forward(self, im_q, im_k):
         """
         Input:
             im_q: a batch of query images
@@ -128,9 +164,11 @@ class MoCo(nn.Module):
         Output:
             logits, targets
         """
-
+        
         # compute query features
-        q = self.encoder_q(im_q)  # queries: NxC
+
+        q = self.model["encoder"](im_q)
+        q = self.model["moco"](q)  # queries: NxC
         q = nn.functional.normalize(q, dim=1)
 
         # compute key features

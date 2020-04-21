@@ -50,7 +50,7 @@ parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
 parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
-parser.add_argument('--checkpoint-interval', default=50, type=int,
+parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 
 
@@ -127,13 +127,15 @@ parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
-# Fast AutoAugment Args. 
+# Fast AutoAugment Args.
 parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
-parser.add_argument('--randomcrop', action='store_true', 
+parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
 
+parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
+parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
 
 
 
@@ -163,11 +165,11 @@ def main():
 
     ngpus_per_node = torch.cuda.device_count()
 
-    # set the checkpoint id    
+    # set the checkpoint id
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
-        args.world_size = ngpus_per_node * args.world_size 
+        args.world_size = ngpus_per_node * args.world_size
 
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
@@ -212,12 +214,21 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
     # create model
+    heads = {}
+    if not args.nomoco:
+        heads["moco"] = {
+            "num_classes": args.moco_dim
+        }
+    if args.rotnet:
+        heads["rotnet"] = {
+            "num_classes": 4
+        }
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp, args.dataid)
-
+        K=args.moco_k, m=args.moco_m, T=args.moco_t, mlp=args.mlp, dataid=args.dataid,
+        multitask_heads=heads
+    )
     print(model)
-
 
 
     if args.distributed:
@@ -278,24 +289,24 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
 
-    # Set up crops and normalization depending on the dataset. 
+    # Set up crops and normalization depending on the dataset.
 
-    # Cifar 10 crops and normalization. 
-    if args.dataid == "cifar10": 
+    # Cifar 10 crops and normalization.
+    if args.dataid == "cifar10":
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
         if not args.randomcrop:
             random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
-        else: 
-            # Use the crop they were using in Fast AutoAugment. 
+        else:
+            # Use the crop they were using in Fast AutoAugment.
             random_resized_crop = transforms.RandomCrop(32, padding=4)
 
-    # Use the imagenet parameters. 
-    else: 
+    # Use the imagenet parameters.
+    else:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
-        
+
     if args.aug_plus:
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
@@ -310,7 +321,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    elif args.faa_aug: 
+    elif args.faa_aug:
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop)
         transformations = moco.loader.TwoCropsTransform(augmentation)
     else:
@@ -324,9 +335,9 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    if not args.faa_aug: 
+    if not args.faa_aug:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
-        
+
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
@@ -408,20 +419,26 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output, target = model(im_q=images[0], im_k=images[1])
-        loss = criterion(output, target)
 
-        # acc1/acc5 are (K+1)-way contrast classifier accuracy
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images[0].size(0))
-        top1.update(acc1[0], images[0].size(0))
-        top5.update(acc5[0], images[0].size(0))
+        if args.rotnet:
+            # TODO we have to apply all the rotations here somehow and create the expected target
+            # can we map this though another dataloader
+            output, target = model(head="rotnet", im_q=images[0])
+        if not args.nomoco:
+            output, target = model(head="moco", im_q=images[0], im_k=images[1])
+            loss = criterion(output, target)
 
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # acc1/acc5 are (K+1)-way contrast classifier accuracy
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), images[0].size(0))
+            top1.update(acc1[0], images[0].size(0))
+            top5.update(acc5[0], images[0].size(0))
+
+            # compute gradient and do SGD step
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)

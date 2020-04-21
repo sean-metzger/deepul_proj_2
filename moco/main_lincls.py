@@ -102,7 +102,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 
-parser.add_argument('--randomcrop', action='store_true', 
+parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
 parser.add_argument('--pretrained', default='', type=str,
@@ -174,11 +174,11 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch]()
 
-    # CIFAR 10 mod 
+    # CIFAR 10 mod
 
-    if args.dataid =="cifar10": 
-    # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
-        model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
+    if args.dataid =="cifar10":
+    # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
 
     # freeze all layers but the last fc
@@ -189,10 +189,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "cifar10":
         print('before change', model.fc)
-        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10. 
+        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
         print(model.fc)
 
-    # Initialize the weights and biases in the way they did in the paper. 
+    # Initialize the weights and biases in the way they did in the paper.
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
 
@@ -213,14 +213,14 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb_resume = True
             if checkpoint.get('name'):
                 name = checkpoint['name']
+
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
-                if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
+                if k.startswith('module.model.encoder'):
                     # remove prefix
-                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+                    state_dict[k[len("module.model.encoder."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
-
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
             assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
@@ -295,15 +295,15 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
 
 
-    # Chanigng this for CIFAR10. 
+    # Chanigng this for CIFAR10.
 
-    if args.dataid =="cifar10": 
+    if args.dataid =="cifar10":
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
 
 
-    #  Original normalization 
-    else: 
+    #  Original normalization
+    else:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -324,7 +324,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #         normalize,
     #     ]), download=False)
 
-    # val_dataset = torchvision.datasets.CIFAR10(traindir, 
+    # val_dataset = torchvision.datasets.CIFAR10(traindir,
     #     transform= transforms.Compose([
     #     transforms.RandomResizedCrop(224),
     #     transforms.RandomHorizontalFlip(),
@@ -333,20 +333,20 @@ def main_worker(gpu, ngpus_per_node, args):
     #     ]),
     #     download=True, train=False)
 
-    # removed flips. 
+    # removed flips.
 
-    # Readded some data augmentations for training this part. 
+    # Readded some data augmentations for training this part.
 
-    if args.dataid == "cifar10": 
+    if args.dataid == "cifar10":
         crop_size = 28
         orig_size = 32
-    else: 
+    else:
         orig_size = 256
         crop_size = 224
 
-    if not args.randomcrop: 
+    if not args.randomcrop:
         crop_transform = transforms.RandomResizedCrop(crop_size)
-    else: 
+    else:
         crop_transform = transforms.RandomCrop(32, padding=4)
         crop_size=32
 
@@ -358,7 +358,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize,
         ]), download=False)
 
-    val_dataset = torchvision.datasets.CIFAR10(args.data, 
+    val_dataset = torchvision.datasets.CIFAR10(args.data,
         transform= transforms.Compose([
         transforms.Resize(orig_size),
         transforms.CenterCrop(crop_size),
@@ -380,7 +380,7 @@ def main_worker(gpu, ngpus_per_node, args):
                    id=args.id, resume=wandb_resume,
                    config=args.__dict__, notes=args.notes, job_type='linclass')
 
-        
+
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -411,7 +411,7 @@ def main_worker(gpu, ngpus_per_node, args):
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
             wandb.log({"val-acc1": acc1})
-            
+
         # remember best acc@1 and save checkpoint
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
             is_best = acc1 > best_acc1
@@ -423,7 +423,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     'arch': args.arch,
                     'state_dict': model.state_dict(),
                     'best_acc1': best_acc1,
-                    'optimizer' : optimizer.state_dict(),                
+                    'optimizer' : optimizer.state_dict(),
                 }, savefile)
                 wandb.save(savefile)
 
@@ -431,7 +431,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
     batch_time = AverageMeter('LinCls Time', ':6.3f')
     data_time = AverageMeter('LinCls Data', ':6.3f')
     losses = AverageMeter('LinCls Loss', ':.4e')
-    top1 = AverageMeter('LinCls Acc@1', ':6.2f') 
+    top1 = AverageMeter('LinCls Acc@1', ':6.2f')
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
