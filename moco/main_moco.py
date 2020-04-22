@@ -401,12 +401,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     rot_losses = AverageMeter('Rot Loss', ':.4e')
+    moco_losses = AverageMeter('MOCO Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        [batch_time, data_time, losses, rot_losses, top1, top5],
         prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
 
     # switch to train mode
@@ -423,12 +424,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         
         # compute output
+        optimizer.zero_grad()
         if args.rotnet:
             use_images = images[0]
             nimages = use_images.shape[0]
 
             # rotate the images randomly
-            rot_classes = torch.randint(4, [nimages])
+            rot_classes = torch.randint(4, [nimages]).cuda()
             rotated_images = torch.zeros_like(use_images)
             rotated_images[rot_classes==0] = use_images[rot_classes==0]
             # rotate 90
@@ -438,33 +440,35 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             # rotate 270
             rotated_images[rot_classes==3] = use_images[rot_classes==3].transpose(2,3).flip(3)
 
-            if i == 0:
-                eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
-                eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
-                wandb.log({"example rotated image": [eximg0, eximg1]})
+            # if i == 0:
+            #     eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
+            #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
+            #     wandb.log({"example rotated image": [eximg0, eximg1]})
             output = model(head="rotnet", im_q=images[0])
-            loss = criterion(output, targets)
-
-            rot_losses.update(loss.item(), images[0].size(0))
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            rot_loss = criterion(output, rot_classes)
+            rot_losses.update(rot_loss.item(), images[0].size(0))
             
         if not args.nomoco:
             output, target = model(head="moco", im_q=images[0], im_k=images[1])
-            loss = criterion(output, target)
+            moco_loss = criterion(output, target)
 
             # acc1/acc5 are (K+1)-way contrast classifier accuracy
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images[0].size(0))
+            moco_losses.update(moco_loss.item(), images[0].size(0))
             top1.update(acc1[0], images[0].size(0))
             top5.update(acc5[0], images[0].size(0))
 
-            # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+
+        if not args.nomoco and args.rotnet:
+            loss = rot_loss + moco_loss
+        elif not args.nomo:
+            loss = moco_loss
+        elif args.rotnet:
+            loss = rot_loss
+        losses.update(loss.item())
+        loss.backward()
+        optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
