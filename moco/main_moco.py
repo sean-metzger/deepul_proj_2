@@ -462,7 +462,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         if not args.nomoco and args.rotnet:
             loss = rot_loss + moco_loss
-        elif not args.nomo:
+        elif not args.nomoco:
             loss = moco_loss
         elif args.rotnet:
             loss = rot_loss
