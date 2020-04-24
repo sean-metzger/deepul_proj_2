@@ -64,7 +64,8 @@ class MoCo(nn.Module):
                 self.encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
                 self.encoder_k.maxpool = nn.Identity()
                 
-            # set the params to be the same starting values    
+            # set the params to be the same starting values
+            
             for param_q, param_k in zip(self._get_moco_params(), self.encoder_k.parameters()):
                 param_k.data.copy_(param_q.data)  
                 param_k.requires_grad = False  # not update by gradient, update by momentum technique

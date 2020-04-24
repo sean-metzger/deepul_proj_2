@@ -424,7 +424,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         
         # compute output
-        optimizer.zero_grad()
         if args.rotnet:
             use_images = images[0]
             nimages = use_images.shape[0]
@@ -467,6 +466,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
         elif args.rotnet:
             loss = rot_loss
         losses.update(loss.item())
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
