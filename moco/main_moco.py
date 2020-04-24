@@ -427,23 +427,28 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
         if args.rotnet:
             use_images = images[0]
             nimages = use_images.shape[0]
+            n_rot_images = 4*use_images.shape[0]
 
-            # rotate the images randomly
-            rot_classes = torch.randint(4, [nimages]).cuda()
-            rotated_images = torch.zeros_like(use_images)
-            rotated_images[rot_classes==0] = use_images[rot_classes==0]
+            # rotate images all 4 ways at once
+            rotated_images = torch.zeros([n_rot_images, use_images.shape[1], use_images.shape[2], use_images.shape[3]]).cuda()
+            rot_classes = torch.zeros([n_rot_images]).long().cuda()
+
+            rotated_images[:nimages] = use_images
             # rotate 90
-            rotated_images[rot_classes==1] = use_images[rot_classes==1].flip(3).transpose(2,3)
+            rotated_images[nimages:2*nimages] = use_images.flip(3).transpose(2,3)
+            rot_classes[nimages:2*nimages] = 1
             # rotate 180
-            rotated_images[rot_classes==2] = use_images[rot_classes==2].flip(3).flip(2)
+            rotated_images[2*nimages:3*nimages] = use_images.flip(3).flip(2)
+            rot_classes[2*nimages:3*nimages] = 2
             # rotate 270
-            rotated_images[rot_classes==3] = use_images[rot_classes==3].transpose(2,3).flip(3)
-
+            rotated_images[3*nimages:4*nimages] = use_images.transpose(2,3).flip(3)
+            rot_classes[3*nimages:4*nimages] = 3
+            
             # if i == 0:
             #     eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
             #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
             #     wandb.log({"example rotated image": [eximg0, eximg1]})
-            output = model(head="rotnet", im_q=images[0])
+            output = model(head="rotnet", im_q=rotated_images)
             rot_loss = criterion(output, rot_classes)
             rot_losses.update(rot_loss.item(), images[0].size(0))
             
