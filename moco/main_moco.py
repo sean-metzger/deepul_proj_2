@@ -464,15 +464,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             top5.update(acc5[0], images[0].size(0))
 
 
-        if not args.nomoco and args.rotnet:
-            loss = rot_loss + moco_loss
-        elif not args.nomoco:
-            loss = moco_loss
-        elif args.rotnet:
-            loss = rot_loss
-        losses.update(loss.item())
         optimizer.zero_grad()
-        loss.backward()
+        if not args.nomoco and args.rotnet:
+            rot_loss.backward(retain_graph=True)
+            moco_loss.backward()
+            loss = rot_loss.item() + moco_loss.item()
+        elif not args.nomoco:
+            moco_loss.backward()
+            loss = moco_loss.item()
+        elif args.rotnet:
+            rot_loss.backward()
+            loss = rot_loss.item()
+        losses.update(loss)
         optimizer.step()
 
         # measure elapsed time
