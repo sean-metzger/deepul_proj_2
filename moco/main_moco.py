@@ -132,7 +132,8 @@ parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
-
+parser.add_argument('--gauss', action='store_true', 
+                    help='blur with FAA augs')
 
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
@@ -322,9 +323,8 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
-
-    elif args.faa_aug:
-        augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop)
+    elif args.faa_aug: 
+        augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
