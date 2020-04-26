@@ -188,9 +188,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # init the fc layer
 
     if args.dataid == "cifar10":
-        print('before change', model.fc)
         model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
-        print(model.fc)
 
     # Initialize the weights and biases in the way they did in the paper.
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
@@ -203,9 +201,12 @@ def main_worker(gpu, ngpus_per_node, args):
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
             checkpoint = torch.load(args.pretrained, map_location="cpu")
-
+            
             # rename moco pre-trained keys
             state_dict = checkpoint['state_dict']
+            only_encoder = 'encoder' in state_dict
+            if only_encoder:
+                state_dict = state_dict['encoder']
             if checkpoint.get('id'):
                 # sync the ids for wandb
                 args.id = checkpoint['id']
@@ -216,7 +217,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
-                if k.startswith('module.model.encoder'):
+                if only_encoder:
+                    state_dict[k[len("module."):]] = state_dict[k]
+                elif k.startswith('module.model.encoder'):
                     # remove prefix
                     state_dict[k[len("module.model.encoder."):]] = state_dict[k]
                 # delete renamed or unused k

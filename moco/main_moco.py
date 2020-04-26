@@ -446,7 +446,7 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
     progress = ProgressMeter(
         args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
-        [batch_time, data_time, losses, rot_losses, top1, top5],
+        [batch_time, data_time, losses, rot_losses, top1, top5, moco_losses],
         prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
 
     # switch to train mode
@@ -499,6 +499,9 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
         if not args.nomoco:
             output, target = models["moco"](models["encoder"], im_q=images[0], im_k=images[1])
             moco_loss = criterion(output, target)
+            optimizers["moco"].zero_grad()
+            moco_loss.backward()
+            optimizers["moco"].step()
 
             # acc1/acc5 are (K+1)-way contrast classifier accuracy
             # measure accuracy and record loss

@@ -3,8 +3,6 @@ import torch
 import torch.nn as nn
 from itertools import chain
 
-torch.autograd.set_detect_anomaly(True)
-
 
 class MoCo(nn.Module):
     """
