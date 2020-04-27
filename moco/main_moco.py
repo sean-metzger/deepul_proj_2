@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+x#!/usr/bin/env python
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import argparse
 import builtins
@@ -119,7 +119,8 @@ parser.add_argument('--moco-m', default=0.999, type=float,
 parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
-
+parser.add_argument('--kfold', default=None, type=int, 
+    help="which fold to use")
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
@@ -127,6 +128,8 @@ parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
+
+
 # Fast AutoAugment Args.
 parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
@@ -137,8 +140,6 @@ parser.add_argument('--gauss', action='store_true',
 
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
-
-
 
 
 ngpus_per_node = torch.cuda.device_count()
@@ -193,12 +194,14 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_faa"
     if args.randomcrop:
         CHECKPOINT_ID += "_randcrop"
+    if not(args.kfold == None): 
+        CHECKPOINT_ID += "_fold_%d" %(args.kfold)
 
     args.gpu = gpu
 
     # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0:
-        def print_pass(*args):
+        def print_pass(*args): 
             pass
         builtins.print = print_pass
 
@@ -352,15 +355,35 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
 
+    if not args.kfold == None: 
+
+        torch.manual_seed(1337)
+        print('before: K FOLD', args.kfold, len(train_dataset))
+        lengths = [len(train_dataset)//5]*5
+        print(lengths)
+        folds = torch.utils.data.random_split(train_dataset, lengths )
+        print(len(folds))
+        folds.pop(args.kfold)
+        print(len(folds))
+        train_dataset = torch.utils.data.ConcatDataset(folds)
+        print(len(train_dataset))
+
+    else: 
+        print("NO KFOLD ARG", args.kfold)
+
+    
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
         train_sampler = None
 
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+
+    print(len(train_loader))
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.gpu == 0:
         wandb.init(project=args.wandbproj,
@@ -476,7 +499,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             rot_loss.backward()
             loss = rot_loss.item()
         losses.update(loss)
-        optimizer.step()
+        s.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
