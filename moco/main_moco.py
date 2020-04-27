@@ -167,6 +167,7 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+    print("NGPUs per node: {}".format(ngpus_per_node))
 
     # set the checkpoint id
     if args.multiprocessing_distributed:
@@ -217,6 +218,14 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
 
+        if args.gpu is not None:
+            # When using a single GPU per process and per
+            # DistributedDataParallel, we need to divide the batch size
+            # ourselves based on the total number of GPUs we have
+            torch.cuda.set_device(args.gpu)
+            args.batch_size = int(args.batch_size / ngpus_per_node)
+            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+
 
     def distributed_model(mdl):
         if args.distributed:
@@ -224,13 +233,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # should always set the single device scope, otherwise,
             # DistributedDataParallel will use all available devices.
             if args.gpu is not None:
-                torch.cuda.set_device(args.gpu)
                 mdl.cuda(args.gpu)
-                # When using a single GPU per process and per
-                # DistributedDataParallel, we need to divide the batch size
-                # ourselves based on the total number of GPUs we have
-                args.batch_size = int(args.batch_size / ngpus_per_node)
-                args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
                 return torch.nn.parallel.DistributedDataParallel(mdl, device_ids=[args.gpu])
             else:
                 mdl.cuda()
@@ -303,6 +306,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+
+    print("ARGS: {}".format(args))
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -399,6 +404,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    print("Train loader number of batches per epoch: {}; batch size: {}".format(len(train_loader), args.batch_size))
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.gpu == 0:
         wandb.init(project=args.wandbproj,

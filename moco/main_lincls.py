@@ -381,7 +381,7 @@ def main_worker(gpu, ngpus_per_node, args):
         wandb.init(project=args.wandbproj,
                    name=name,
                    id=args.id, resume=wandb_resume,
-                   config=args.__dict__, notes=args.notes, job_type='linclass')
+                   config=args.__dict__, job_type='linclass')
 
 
 
