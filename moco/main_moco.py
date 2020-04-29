@@ -1,4 +1,4 @@
-x#!/usr/bin/env python
+#!/usr/bin/env python
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import argparse
 import builtins
@@ -119,6 +119,10 @@ parser.add_argument('--moco-m', default=0.999, type=float,
 parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
+# With the new FAA. 
+parser.add_argument('--custom_aug_name', default="custom", type=str, 
+    help='nickname for the custom augmentations being used, for model naming')
+
 parser.add_argument('--kfold', default=None, type=int, 
     help="which fold to use")
 # options for moco v2
@@ -133,6 +137,7 @@ parser.add_argument('--cos', action='store_true',
 # Fast AutoAugment Args.
 parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
+
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 parser.add_argument('--gauss', action='store_true', 
@@ -196,6 +201,9 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_randcrop"
     if not(args.kfold == None): 
         CHECKPOINT_ID += "_fold_%d" %(args.kfold)
+    if not(args.custom_aug_name == None): 
+        CHECKPOINT_ID += "_custom_aug_" + args.custom_aug_name
+
 
     args.gpu = gpu
 
@@ -329,6 +337,12 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+
+    elif not args.custom_aug_name == None:
+
+        augmentation, _ = slm_utils.get_faa_transforms.get_custom_faa_transforms(name=args.custom_aug_name)
+        transformations = moco.loader.TwoCropsTransform(augmentation)
+
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -340,7 +354,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    if not args.faa_aug:
+    if not args.faa_aug and args.custom_aug_name == None: 
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
 
@@ -499,7 +513,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             rot_loss.backward()
             loss = rot_loss.item()
         losses.update(loss)
-        s.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
