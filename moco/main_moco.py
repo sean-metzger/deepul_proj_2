@@ -1,4 +1,4 @@
-x#!/usr/bin/env python
+#!/usr/bin/env python
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import argparse
 import builtins
@@ -311,13 +311,14 @@ def main_worker(gpu, ngpus_per_node, args):
     # MOCO #
     ########
     if not args.nomoco:
-        moco_head = moco.builder.MoCo(encoder, encoder_k, dim_mlp, args.moco_dim)
+        moco_head = moco.builder.MoCo(encoder, encoder_k, dim_mlp, args.moco_dim, mlp=args.mlp)
         moco_head = distributed_model(moco_head)
         print("MOCO")
         print(moco_head)
         optimizers["moco"] = torch.optim.SGD(list(encoder.parameters()) + list(moco_head.parameters()), args.lr,
-                                               momentum=args.momentum,
-                                               weight_decay=args.weight_decay)
+                                             momentum=args.momentum,
+                                             weight_decay=args.weight_decay,
+        )
         models["moco"] = moco_head
         
 
@@ -461,6 +462,7 @@ def main_worker(gpu, ngpus_per_node, args):
         wandb.init(project=args.wandbproj,
                name=CHECKPOINT_ID, id=args.id, resume=args.resume,
                config=args.__dict__, notes=args.notes)
+        print(models)
 
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -577,7 +579,7 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
         elif args.rotnet:
             loss = rot_loss.item()
         losses.update(loss)
-        s.step()
+        
 
 
         # measure elapsed time

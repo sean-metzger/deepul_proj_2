@@ -24,6 +24,7 @@ class MoCo(nn.Module):
         self.moco_head = nn.Linear(dim_mlp, mocodim)
         if mlp:
             self.moco_head = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.moco_head)
+            encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), encoder_k.fc)
         
         self.encoder_k = encoder_k
         # set the params to be the same starting values
