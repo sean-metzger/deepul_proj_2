@@ -107,8 +107,17 @@ parser.add_argument('--randomcrop', action='store_true',
 
 parser.add_argument('--pretrained', default='', type=str,
                     help='path to moco pretrained checkpoint')
+parser.add_argument('--mlp', action='store_true',
+                    help='train a 2 layer mlp instead of a linear layer')
+parser.add_argument('--task', default='classify',
+                    help='which task to train', choices=("classify", "rotation"))
+
+parser.add_argument('--kfold', default=None, type=int, 
+                    help = "which fold we're looking at")
 
 best_acc1 = 0
+
+
 
 
 def main():
@@ -180,21 +189,25 @@ def main_worker(gpu, ngpus_per_node, args):
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
+        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
 
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
         if name not in ['fc.weight', 'fc.bias']:
             param.requires_grad = False
-    # init the fc layer
 
-    if args.dataid == "cifar10":
-        print('before change', model.fc)
-        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
-        print(model.fc)
+
 
     # Initialize the weights and biases in the way they did in the paper.
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
+
+    # hack the mlp into the final layer    
+    if args.mlp:
+        print('training mlp final layer')
+        model.fc = nn.Sequential(nn.Linear(model.fc.in_features, model.fc.in_features), model.fc)
+        model.fc[0].weight.data.normal_(mean=0.0, std=0.01)
+        model.fc[0].bias.data.zero_()
 
     # load from pre-trained, before DistributedDataParallel constructor
     wandb_resume = args.resume
@@ -203,9 +216,12 @@ def main_worker(gpu, ngpus_per_node, args):
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
             checkpoint = torch.load(args.pretrained, map_location="cpu")
-
+            
             # rename moco pre-trained keys
             state_dict = checkpoint['state_dict']
+            only_encoder = 'encoder' in state_dict
+            if only_encoder:
+                state_dict = state_dict['encoder']
             if checkpoint.get('id'):
                 # sync the ids for wandb
                 args.id = checkpoint['id']
@@ -213,16 +229,23 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb_resume = True
             if checkpoint.get('name'):
                 name = checkpoint['name']
-
+            
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
-                if k.startswith('module.model.encoder'):
+                if only_encoder:
+                    state_dict[k[len("module."):]] = state_dict[k]
+                elif k.startswith('module.model.encoder'):
                     # remove prefix
                     state_dict[k[len("module.model.encoder."):]] = state_dict[k]
+                elif k.startswith('module.encoder_q'):
+                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
+                
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
+            
+            
             assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
             print("=> loaded pre-trained model '{}'".format(args.pretrained))
@@ -307,34 +330,6 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
-    # train_dataset = datasets.ImageFolder(
-    #     traindir,
-    #     transforms.Compose([
-    #         transforms.RandomResizedCrop(224),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize,
-        # ]))
-
-    # train_dataset = torchvision.datasets.CIFAR10(traindir,
-    #     transform= transforms.Compose([
-    #         transforms.RandomResizedCrop(224),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize,
-    #     ]), download=False)
-
-    # val_dataset = torchvision.datasets.CIFAR10(traindir,
-    #     transform= transforms.Compose([
-    #     transforms.RandomResizedCrop(224),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    #     normalize,
-    #     ]),
-    #     download=True, train=False)
-
-    # removed flips.
-
     # Readded some data augmentations for training this part.
 
     if args.dataid == "cifar10":
@@ -358,14 +353,44 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize,
         ]), download=False)
 
-    val_dataset = torchvision.datasets.CIFAR10(args.data,
-        transform= transforms.Compose([
-        transforms.Resize(orig_size),
-        transforms.CenterCrop(crop_size),
-        transforms.ToTensor(),
-        normalize,
-        ]),
-        download=True, train=False)
+
+    val_transform = transforms.Compose([
+            transforms.Resize(orig_size),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+            normalize,
+            ])
+
+    if args.kfold == None: 
+        val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
+            download=True, train=False)
+
+    else: 
+        # use the held out train data as the validation data. 
+        val_dataset = torchvision.datasets.CIFAR10(args.data,
+            transform= val_transform, download=True)
+
+
+    if not args.kfold == None: 
+        torch.manual_seed(1337)
+        print('before: K FOLD', args.kfold, len(train_dataset))
+        lengths = [len(train_dataset)//5]*5
+        print(lengths)
+        folds = torch.utils.data.random_split(train_dataset, lengths)
+        folds.pop(args.kfold)
+        train_dataset = torch.utils.data.ConcatDataset(folds)
+
+        # Get the validation split
+        print('pre split val', val_dataset)
+        torch.manual_seed(1337)
+        lengths = [len(val_dataset)//5]*5
+        folds = torch.utils.data.random_split(val_dataset, lengths)
+        val_dataset = folds[args.kfold]
+        print('len val', len(val_dataset))
+
+    else: 
+        print("NO KFOLD ARG", args.kfold)
+
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -375,12 +400,12 @@ def main_worker(gpu, ngpus_per_node, args):
     # CR: only the master will report to wandb for now
     is_main_node = not args.multiprocessing_distributed or args.gpu == 0
     if is_main_node:
+        # use lcls prefix so we don't overwrite the training args
+        wandb_args = {"lcls_{}".format(key): val for key, val in args.__dict__.items()}
         wandb.init(project=args.wandbproj,
                    name=name,
                    id=args.id, resume=wandb_resume,
-                   config=args.__dict__, notes=args.notes, job_type='linclass')
-
-
+                   config=wandb_args, job_type='linclass')
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -394,11 +419,10 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.evaluate:
         validate(val_loader, model, criterion, args, is_main_node)
         return
-
+    print("Doing task: {}".format(args.task))
     for epoch in range(args.start_epoch, args.epochs):
 
         print(epoch)
-
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
@@ -406,11 +430,10 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args, is_main_node, args.id[:5])
 
-
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
-            wandb.log({"val-acc1": acc1})
+            wandb.log({"val-{}".format(args.task): acc1})
 
         # remember best acc@1 and save checkpoint
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
@@ -430,13 +453,14 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
     batch_time = AverageMeter('LinCls Time', ':6.3f')
     data_time = AverageMeter('LinCls Data', ':6.3f')
+    rot_losses = AverageMeter('Rot Val Loss', ':.4e')
     losses = AverageMeter('LinCls Loss', ':.4e')
     top1 = AverageMeter('LinCls Acc@1', ':6.2f')
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        [batch_time, data_time, losses, top1, top5, rot_losses],
         prefix="{} LinClass Epoch: [{}]".format(runid, epoch))
 
     """
@@ -452,18 +476,24 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-
         if args.gpu is not None:
             images = images.cuda(args.gpu, non_blocking=True)
-        target = target.cuda(args.gpu, non_blocking=True)
 
-        # compute output
-        output = model(images)
-        loss = criterion(output, target)
+        if args.task=="rotation":
+            rotated_images, target = rotate_images(images)
+            output = model(rotated_images)
+            loss = criterion(output, target)
+            rot_losses.update(loss.item(), images.size(0))            
+        else:
+            target = target.cuda(args.gpu, non_blocking=True)
 
+            # compute output
+            output = model(images)
+            loss = criterion(output, target)
+            losses.update(loss.item(), images.size(0))
+            
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
@@ -483,12 +513,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
 def validate(val_loader, model, criterion, args, is_main_node=False):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Val Loss', ':.4e')
+    rot_losses = AverageMeter('Rot Val Loss', ':.4e')
     top1 = AverageMeter('Val Acc@1', ':6.2f')
     top5 = AverageMeter('Val Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(val_loader),
-        [batch_time, losses, top1, top5],
+        [batch_time, losses, top1, top5, rot_losses],
         prefix='Test: ')
 
     # switch to evaluate mode
@@ -499,15 +530,21 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
         for i, (images, target) in enumerate(val_loader):
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
-            target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(images)
-            loss = criterion(output, target)
+            if args.task=="rotation":
+                rotated_images, target = rotate_images(images)
+                output = model(rotated_images)
+                loss = criterion(output, target)
+                rot_losses.update(loss.item(), images.size(0))            
+            else:
+                target = target.cuda(args.gpu, non_blocking=True)
+                output = model(images)
+                loss = criterion(output, target)
+                losses.update(loss.item(), images.size(0))
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images.size(0))
             top1.update(acc1[0], images.size(0))
             top5.update(acc5[0], images.size(0))
 
@@ -523,6 +560,27 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
               .format(top1=top1, top5=top5))
 
     return top1.avg
+
+def rotate_images(images):
+    nimages = images.shape[0]
+    n_rot_images = 4*nimages
+
+    # rotate images all 4 ways at once
+    rotated_images = torch.zeros([n_rot_images, images.shape[1], images.shape[2], images.shape[3]]).cuda()
+    rot_classes = torch.zeros([n_rot_images]).long().cuda()
+
+    rotated_images[:nimages] = images
+    # rotate 90
+    rotated_images[nimages:2*nimages] = images.flip(3).transpose(2,3)
+    rot_classes[nimages:2*nimages] = 1
+    # rotate 180
+    rotated_images[2*nimages:3*nimages] = images.flip(3).flip(2)
+    rot_classes[2*nimages:3*nimages] = 2
+    # rotate 270
+    rotated_images[3*nimages:4*nimages] = images.transpose(2,3).flip(3)
+    rot_classes[3*nimages:4*nimages] = 3
+
+    return rotated_images, rot_classes
 
 
 def sanity_check(state_dict, pretrained_weights):
