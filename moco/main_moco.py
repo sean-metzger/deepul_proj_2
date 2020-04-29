@@ -22,16 +22,18 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import torchvision.models as models
+import torchvision.models as tv_models
 
+
+from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
 import moco.builder
 
-model_names = sorted(name for name in models.__dict__
+model_names = sorted(name for name in tv_models.__dict__
     if name.islower() and not name.startswith("__")
-    and callable(models.__dict__[name]))
+    and callable(tv_models.__dict__[name]))
 
 
 # ONLINE LOGGING
@@ -123,6 +125,8 @@ parser.add_argument('--moco-t', default=0.07, type=float,
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
+parser.add_argument('--rotnet_mlp', action='store_true',
+                    help='use mlp head for rotnet')
 parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
@@ -134,6 +138,12 @@ parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 parser.add_argument('--gauss', action='store_true', 
                     help='blur with FAA augs')
+
+
+# RandAug
+parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
+parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
+parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
 
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
@@ -165,6 +175,7 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+    print("NGPUs per node: {}".format(ngpus_per_node))
 
     # set the checkpoint id
     if args.multiprocessing_distributed:
@@ -181,8 +192,8 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    CHECKPOINT_ID = "{}_{}_{}epochs_{}bsz_{:0.4f}lr_{:0.4f}mtm_{}sched_{:0.4f}mocod_{}mocok_{:0.4f}mocom_{:0.4f}mocot_{:0.3e}wd" \
-        .format(args.id[:5], args.arch, args.epochs, args.batch_size, args.lr, args.momentum, "-".join([str(x) for x in args.schedule]), args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.weight_decay)
+    CHECKPOINT_ID = "{}_{}epochs_{}bsz_{:0.4f}lr" \
+        .format(args.id[:5], args.epochs, args.batch_size, args.lr)
     if args.mlp:
         CHECKPOINT_ID += "_mlp"
     if args.aug_plus:
@@ -193,6 +204,13 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_faa"
     if args.randomcrop:
         CHECKPOINT_ID += "_randcrop"
+    if args.rotnet:
+        if args.rotnet_mlp:
+            CHECKPOINT_ID += "_rotnetmlp"
+        else:
+            CHECKPOINT_ID += "_rotnet"
+    if args.rand_aug:
+        CHECKPOINT_ID += "_randaug"
 
     args.gpu = gpu
 
@@ -214,59 +232,97 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-    # create model
-    heads = {}
-    if not args.nomoco:
-        heads["moco"] = {
-            "num_classes": args.moco_dim
-        }
-    if args.rotnet:
-        heads["rotnet"] = {
-            "num_classes": 4
-        }
-    model = moco.builder.MoCo(
-        models.__dict__[args.arch],
-        K=args.moco_k, m=args.moco_m, T=args.moco_t, mlp=args.mlp, dataid=args.dataid,
-        multitask_heads=heads
-    )
-    print(model)
 
-
-    if args.distributed:
-        # For multiprocessing distributed, DistributedDataParallel constructor
-        # should always set the single device scope, otherwise,
-        # DistributedDataParallel will use all available devices.
         if args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-            model.cuda(args.gpu)
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
+            torch.cuda.set_device(args.gpu)
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+
+
+    def distributed_model(mdl):
+        if args.distributed:
+            # For multiprocessing distributed, DistributedDataParallel constructor
+            # should always set the single device scope, otherwise,
+            # DistributedDataParallel will use all available devices.
+            if args.gpu is not None:
+                mdl.cuda(args.gpu)
+                return torch.nn.parallel.DistributedDataParallel(mdl, device_ids=[args.gpu])
+            else:
+                mdl.cuda()
+                # DistributedDataParallel will divide and allocate batch_size to all
+                # available GPUs if device_ids are not set
+                return torch.nn.parallel.DistributedDataParallel(mdl)
+        elif args.gpu is not None:
+            torch.cuda.set_device(args.gpu)
+            return mdl.cuda(args.gpu)
+            # comment out the following line for debugging
+            # raise NotImplementedError("Only DistributedDataParallel is supported.")
         else:
-            model.cuda()
-            # DistributedDataParallel will divide and allocate batch_size to all
-            # available GPUs if device_ids are not set
-            model = torch.nn.parallel.DistributedDataParallel(model)
-    elif args.gpu is not None:
-        torch.cuda.set_device(args.gpu)
-        model = model.cuda(args.gpu)
-        # comment out the following line for debugging
-        # raise NotImplementedError("Only DistributedDataParallel is supported.")
-    else:
-        # AllGather implementation (batch shuffle, queue update, etc.) in
-        # this code only supports DistributedDataParallel.
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+            # AllGather implementation (batch shuffle, queue update, etc.) in
+            # this code only supports DistributedDataParallel.
+            raise NotImplementedError("Only DistributedDataParallel is supported.")
+
+
+    models = {}
+    optimizers = {}
+    ###########
+    # ENCODER #
+    ###########
+    # create models in a distributeddataparallel way
+    encoder = tv_models.__dict__[args.arch](num_classes=100) # num_classes doesn't matter since we remove this layer
+    encoder_k = tv_models.__dict__[args.arch](num_classes=args.moco_dim)
+    dim_mlp = encoder.fc.weight.shape[1]
+    if args.dataid =="cifar10": 
+        # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
+        encoder.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
+        encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
+        # Get rid of maxpool, as in SIMCLR cifar10 experiments. 
+        encoder.maxpool = nn.Identity()
+        encoder_k.maxpool = nn.Identity()
+    # hack to "remove" the fc layer
+    encoder.fc = nn.Identity()
+    encoder = distributed_model(encoder)
+    print("ENCODER")
+    print(encoder)
+    models["encoder"] = encoder
+    
+    ##########
+    # ROTNET #
+    ##########
+    if args.rotnet:
+        rotnet_head = nn.Linear(dim_mlp, 4)
+        if args.rotnet_mlp:
+            rotnet_head = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), rotnet_head)
+        rotnet_head = distributed_model(rotnet_head)
+        print("ROTNET")
+        print(rotnet_head)
+        optimizers["rotnet"] = torch.optim.SGD(list(encoder.parameters()) + list(rotnet_head.parameters()), args.lr,
+                                               momentum=args.momentum,
+                                               weight_decay=args.weight_decay)
+        models["rotnet"] = rotnet_head
+
+    ########
+    # MOCO #
+    ########
+    if not args.nomoco:
+        moco_head = moco.builder.MoCo(encoder, encoder_k, dim_mlp, args.moco_dim)
+        moco_head = distributed_model(moco_head)
+        print("MOCO")
+        print(moco_head)
+        optimizers["moco"] = torch.optim.SGD(list(encoder.parameters()) + list(moco_head.parameters()), args.lr,
+                                               momentum=args.momentum,
+                                               weight_decay=args.weight_decay)
+        models["moco"] = moco_head
+        
+
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-    # TODO(pr) should each head have its own optimizer
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    print("ARGS: {}".format(args))
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -279,8 +335,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 loc = 'cuda:{}'.format(args.gpu)
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            for model_key, model_val in checkpoint['models']:
+                model.load_state_dict(model_val)
+            for opt_key, opt_val in checkpoint['optimizers']:
+                optimizers[opt_key].load_state_dict(opt_val)
             args.id=checkpoint['id']
             args.id=checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -311,6 +369,7 @@ def main_worker(gpu, ngpus_per_node, args):
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
     if args.aug_plus:
+        print("Using aug plus")
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
             random_resized_crop,
@@ -323,10 +382,21 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
-    elif args.faa_aug: 
+    elif args.faa_aug:
+        print("Using faa aug")
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+    elif args.rand_aug:
+        print("Using random aug")
+        augmentation = [
+            random_resized_crop,
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]        
     else:
+        print("Using mocov1 aug")
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
             random_resized_crop,
@@ -361,6 +431,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    print("Train loader number of batches per epoch: {}; batch size: {}".format(len(train_loader), args.batch_size))
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.gpu == 0:
         wandb.init(project=args.wandbproj,
@@ -371,10 +442,11 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
+        for _,optimizer in optimizers.items():
+            adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
+        train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_ID)
 
         if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
            and (not args.multiprocessing_distributed or
@@ -384,8 +456,8 @@ def main_worker(gpu, ngpus_per_node, args):
             torch.save({
                 'epoch': epoch + 1,
                 'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
+                'state_dict': {k: v.state_dict() for k,v in models.items()},
+                'optimizers' : {k: v.state_dict() for k,v in optimizers.items()},
                 'id': args.id,
                 'name': CHECKPOINT_ID,
             }, cp_fullpath)
@@ -396,7 +468,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print("Done - wrapping up")
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID):
+def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_ID):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -407,11 +479,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
     progress = ProgressMeter(
         args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
-        [batch_time, data_time, losses, rot_losses, top1, top5],
+        [batch_time, data_time, losses, rot_losses, top1, top5, moco_losses],
         prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
 
     # switch to train mode
-    model.train()
+    for model in models.values():
+        model.train()
 
     end = time.time()
     for i, (images, _) in enumerate(train_loader):
@@ -448,35 +521,38 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             #     eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
             #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
             #     wandb.log({"example rotated image": [eximg0, eximg1]})
-            output = model(head="rotnet", im_q=rotated_images)
-            rot_loss = criterion(output, rot_classes)
-            rot_losses.update(rot_loss.item(), images[0].size(0))
+            target = rot_classes
+            output = models["rotnet"](models["encoder"](rotated_images))
+            rot_loss = criterion(output, target)
+            optimizers["rotnet"].zero_grad()
+            rot_loss.backward()
+            optimizers["rotnet"].step()
+            rot_losses.update(rot_loss.item(), rotated_images.size(0))
             
         if not args.nomoco:
-            output, target = model(head="moco", im_q=images[0], im_k=images[1])
+            output, target = models["moco"](models["encoder"], im_q=images[0], im_k=images[1])
             moco_loss = criterion(output, target)
+            optimizers["moco"].zero_grad()
+            moco_loss.backward()
+            optimizers["moco"].step()
 
             # acc1/acc5 are (K+1)-way contrast classifier accuracy
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
             moco_losses.update(moco_loss.item(), images[0].size(0))
-            top1.update(acc1[0], images[0].size(0))
-            top5.update(acc5[0], images[0].size(0))
+
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        top1.update(acc1[0], images[0].size(0))
+        top5.update(acc5[0], images[0].size(0))
 
 
-        optimizer.zero_grad()
         if not args.nomoco and args.rotnet:
-            rot_loss.backward(retain_graph=True)
-            moco_loss.backward()
-            loss = rot_loss.item() + moco_loss.item()
+            comb_loss = rot_loss + moco_loss
+            loss = comb_loss.item()
         elif not args.nomoco:
-            moco_loss.backward()
             loss = moco_loss.item()
         elif args.rotnet:
-            rot_loss.backward()
             loss = rot_loss.item()
         losses.update(loss)
-        optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
