@@ -24,6 +24,8 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as tv_models
 
+
+from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -137,6 +139,12 @@ parser.add_argument('--randomcrop', action='store_true',
 parser.add_argument('--gauss', action='store_true', 
                     help='blur with FAA augs')
 
+
+# RandAug
+parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
+parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
+parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
+
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
 
@@ -184,8 +192,8 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    CHECKPOINT_ID = "{}_{}_{}epochs_{}bsz_{:0.4f}lr_{:0.4f}mtm_{}sched_{:0.4f}mocod_{}mocok_{:0.4f}mocom_{:0.4f}mocot_{:0.3e}wd" \
-        .format(args.id[:5], args.arch, args.epochs, args.batch_size, args.lr, args.momentum, "-".join([str(x) for x in args.schedule]), args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.weight_decay)
+    CHECKPOINT_ID = "{}_{}epochs_{}bsz_{:0.4f}lr" \
+        .format(args.id[:5], args.epochs, args.batch_size, args.lr)
     if args.mlp:
         CHECKPOINT_ID += "_mlp"
     if args.aug_plus:
@@ -196,6 +204,13 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_faa"
     if args.randomcrop:
         CHECKPOINT_ID += "_randcrop"
+    if args.rotnet:
+        if args.rotnet_mlp:
+            CHECKPOINT_ID += "_rotnetmlp"
+        else:
+            CHECKPOINT_ID += "_rotnet"
+    if args.rand_aug:
+        CHECKPOINT_ID += "_randaug"
 
     args.gpu = gpu
 
@@ -354,6 +369,7 @@ def main_worker(gpu, ngpus_per_node, args):
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
     if args.aug_plus:
+        print("Using aug plus")
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
             random_resized_crop,
@@ -366,10 +382,21 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
-    elif args.faa_aug: 
+    elif args.faa_aug:
+        print("Using faa aug")
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+    elif args.rand_aug:
+        print("Using random aug")
+        augmentation = [
+            random_resized_crop,
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]        
     else:
+        print("Using mocov1 aug")
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
             random_resized_crop,
@@ -494,9 +521,9 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
             #     eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
             #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
             #     wandb.log({"example rotated image": [eximg0, eximg1]})
-            
+            target = rot_classes
             output = models["rotnet"](models["encoder"](rotated_images))
-            rot_loss = criterion(output, rot_classes)
+            rot_loss = criterion(output, target)
             optimizers["rotnet"].zero_grad()
             rot_loss.backward()
             optimizers["rotnet"].step()
@@ -511,10 +538,11 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
 
             # acc1/acc5 are (K+1)-way contrast classifier accuracy
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
             moco_losses.update(moco_loss.item(), images[0].size(0))
-            top1.update(acc1[0], images[0].size(0))
-            top5.update(acc5[0], images[0].size(0))
+
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        top1.update(acc1[0], images[0].size(0))
+        top5.update(acc5[0], images[0].size(0))
 
 
         if not args.nomoco and args.rotnet:
