@@ -112,7 +112,12 @@ parser.add_argument('--mlp', action='store_true',
 parser.add_argument('--task', default='classify',
                     help='which task to train', choices=("classify", "rotation"))
 
+parser.add_argument('--kfold', default=None, type=int, 
+                    help = "which fold we're looking at")
+
 best_acc1 = 0
+
+
 
 
 def main():
@@ -321,34 +326,6 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
-    # train_dataset = datasets.ImageFolder(
-    #     traindir,
-    #     transforms.Compose([
-    #         transforms.RandomResizedCrop(224),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize,
-        # ]))
-
-    # train_dataset = torchvision.datasets.CIFAR10(traindir,
-    #     transform= transforms.Compose([
-    #         transforms.RandomResizedCrop(224),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         normalize,
-    #     ]), download=False)
-
-    # val_dataset = torchvision.datasets.CIFAR10(traindir,
-    #     transform= transforms.Compose([
-    #     transforms.RandomResizedCrop(224),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    #     normalize,
-    #     ]),
-    #     download=True, train=False)
-
-    # removed flips.
-
     # Readded some data augmentations for training this part.
 
     if args.dataid == "cifar10":
@@ -372,14 +349,44 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize,
         ]), download=False)
 
-    val_dataset = torchvision.datasets.CIFAR10(args.data,
-        transform= transforms.Compose([
-        transforms.Resize(orig_size),
-        transforms.CenterCrop(crop_size),
-        transforms.ToTensor(),
-        normalize,
-        ]),
-        download=True, train=False)
+
+    val_transform = transforms.Compose([
+            transforms.Resize(orig_size),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+            normalize,
+            ])
+
+    if args.kfold == None: 
+        val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
+            download=True, train=False)
+
+    else: 
+        # use the held out train data as the validation data. 
+        val_dataset = torchvision.datasets.CIFAR10(args.data,
+            transform= val_transform, download=True)
+
+
+    if not args.kfold == None: 
+        torch.manual_seed(1337)
+        print('before: K FOLD', args.kfold, len(train_dataset))
+        lengths = [len(train_dataset)//5]*5
+        print(lengths)
+        folds = torch.utils.data.random_split(train_dataset, lengths)
+        folds.pop(args.kfold)
+        train_dataset = torch.utils.data.ConcatDataset(folds)
+
+        # Get the validation split
+        print('pre split val', val_dataset)
+        torch.manual_seed(1337)
+        lengths = [len(val_dataset)//5]*5
+        folds = torch.utils.data.random_split(val_dataset, lengths)
+        val_dataset = folds[args.kfold]
+        print('len val', len(val_dataset))
+
+    else: 
+        print("NO KFOLD ARG", args.kfold)
+
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -395,8 +402,6 @@ def main_worker(gpu, ngpus_per_node, args):
                    name=name,
                    id=args.id, resume=wandb_resume,
                    config=wandb_args, job_type='linclass')
-
-
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -414,7 +419,6 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, args.epochs):
 
         print(epoch)
-
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
