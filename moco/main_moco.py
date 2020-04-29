@@ -120,7 +120,7 @@ parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
 # With the new FAA. 
-parser.add_argument('--custom_aug_name', default="custom", type=str, 
+parser.add_argument('--custom_aug_name', default=None, type=str, 
     help='nickname for the custom augmentations being used, for model naming')
 
 parser.add_argument('--kfold', default=None, type=int, 
@@ -137,7 +137,6 @@ parser.add_argument('--cos', action='store_true',
 # Fast AutoAugment Args.
 parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
-
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 parser.add_argument('--gauss', action='store_true', 
@@ -354,6 +353,12 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
+
+    print('args faaaug, argscustomaugname, args augplus', args.faa_aug, args.custom_aug_name, 
+        args.aug_plus)
+    print(not args.faa_aug)
+    print(args.custom_aug_name == None)
+    print('above to should be true')
     if not args.faa_aug and args.custom_aug_name == None: 
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
