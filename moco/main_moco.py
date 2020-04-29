@@ -120,6 +120,10 @@ parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
 
+parser.add_argument('--kfold', default=None, type=int, 
+    help="which fold to use")
+
+
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
@@ -137,6 +141,11 @@ parser.add_argument('--gauss', action='store_true',
 
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
+
+# RandAug
+parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
+parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
+parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
 
 
 
@@ -181,8 +190,8 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    CHECKPOINT_ID = "{}_{}_{}epochs_{}bsz_{:0.4f}lr_{:0.4f}mtm_{}sched_{:0.4f}mocod_{}mocok_{:0.4f}mocom_{:0.4f}mocot_{:0.3e}wd" \
-        .format(args.id[:5], args.arch, args.epochs, args.batch_size, args.lr, args.momentum, "-".join([str(x) for x in args.schedule]), args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.weight_decay)
+    CHECKPOINT_ID = "{}_{}epochs_{}bsz_{:0.4f}lr" \
+        .format(args.id[:5], args.epochs, args.batch_size, args.lr)
     if args.mlp:
         CHECKPOINT_ID += "_mlp"
     if args.aug_plus:
@@ -193,6 +202,12 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_faa"
     if args.randomcrop:
         CHECKPOINT_ID += "_randcrop"
+    if args.rotnet:
+        CHECKPOINT_ID += "_rotnet"
+    if args.rand_aug:
+        CHECKPOINT_ID += "_randaug"
+    if not(args.kfold == None): 
+        CHECKPOINT_ID += "_fold_%d" %(args.kfold)
 
     args.gpu = gpu
 
@@ -326,6 +341,15 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+    elif args.rand_aug:
+        print("Using random aug")
+        augmentation = [
+            random_resized_crop,
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]    
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -352,6 +376,21 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
 
+    if not args.kfold == None: 
+        torch.manual_seed(1337)
+        print('before: K FOLD', args.kfold, len(train_dataset))
+        lengths = [len(train_dataset)//5]*5
+        print(lengths)
+        folds = torch.utils.data.random_split(train_dataset, lengths )
+        print(len(folds))
+        folds.pop(args.kfold)
+        print(len(folds))
+        train_dataset = torch.utils.data.ConcatDataset(folds)
+        print(len(train_dataset))
+
+    else: 
+        print("NO KFOLD ARG", args.kfold)
+    
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
@@ -366,7 +405,7 @@ def main_worker(gpu, ngpus_per_node, args):
         wandb.init(project=args.wandbproj,
                name=CHECKPOINT_ID, id=args.id, resume=args.resume,
                config=args.__dict__, notes=args.notes)
-
+        print(model)
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
