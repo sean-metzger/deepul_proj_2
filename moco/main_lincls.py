@@ -229,7 +229,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb_resume = True
             if checkpoint.get('name'):
                 name = checkpoint['name']
-
+            
             for k in list(state_dict.keys()):
                 # retain only encoder_q up to before the embedding layer
                 if only_encoder:
@@ -237,10 +237,14 @@ def main_worker(gpu, ngpus_per_node, args):
                 elif k.startswith('module.model.encoder'):
                     # remove prefix
                     state_dict[k[len("module.model.encoder."):]] = state_dict[k]
+                elif k.startswith('module.encoder_q'):
+                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
+                
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
+            
             
             assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
