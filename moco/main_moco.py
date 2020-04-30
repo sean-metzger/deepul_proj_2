@@ -122,7 +122,8 @@ parser.add_argument('--moco-t', default=0.07, type=float,
 
 parser.add_argument('--kfold', default=None, type=int, 
     help="which fold to use")
-
+parser.add_argument('--custom_aug_name', default=None, type=str, 
+    help='name of custom augmentation')
 
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
@@ -208,6 +209,8 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_randaug"
     if not(args.kfold == None): 
         CHECKPOINT_ID += "_fold_%d" %(args.kfold)
+    if not(args.custom_aug_name == None): 
+        CHECKPOINT_ID += "_custom_aug_" + args.custom_aug_name
 
     args.gpu = gpu
 
@@ -341,6 +344,11 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+
+    elif not args.custom_aug_name == None: 
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(args.custom_aug_name)
+        transformations = moco.loader.TwoCropsTransform(augmentation)
+
     elif args.rand_aug:
         print("Using random aug")
         augmentation = [
@@ -361,7 +369,9 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    if not args.faa_aug:
+
+    print('using augmentation:', augmentation)
+    if not args.faa_aug and args.custom_aug_name == None:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
 
