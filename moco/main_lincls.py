@@ -489,7 +489,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             rotated_images, target = rotate_images(images)
             output = model(rotated_images)
             loss = criterion(output, target)
-            rot_losses.update(loss.item(), images.size(0))            
+            rot_losses.update(loss.item(), images.size(0))
+            acc1 = accuracy(output, target, topk=(1,))
+            acc5 = [100]
         else:
             target = target.cuda(args.gpu, non_blocking=True)
 
@@ -497,9 +499,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             output = model(images)
             loss = criterion(output, target)
             losses.update(loss.item(), images.size(0))
-            
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
@@ -544,7 +546,7 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 loss = criterion(output, target)
                 rot_losses.update(loss.item(), images.size(0))
                 acc1 = accuracy(output, target, topk=(1,))
-                acc5 = [0]
+                acc5 = [100]
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
