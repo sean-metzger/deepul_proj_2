@@ -189,7 +189,10 @@ def main_worker(gpu, ngpus_per_node, args):
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
-        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
+        n_output_classes = 10
+        if args.task == "rotation":
+            n_output_classes = 4
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
@@ -539,17 +542,19 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 rotated_images, target = rotate_images(images)
                 output = model(rotated_images)
                 loss = criterion(output, target)
-                rot_losses.update(loss.item(), images.size(0))            
+                rot_losses.update(loss.item(), images.size(0))
+                acc1 = accuracy(output, target, topk=(1,))
+                acc5 = [0]
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
                 loss = criterion(output, target)
                 losses.update(loss.item(), images.size(0))
-
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
+            
+            top1.update(acc1[0], output.size(0))
+            top5.update(acc5[0], output.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
