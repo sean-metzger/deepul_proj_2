@@ -191,6 +191,7 @@ def main_worker(gpu, ngpus_per_node, args):
         model.maxpool = nn.Identity()
         n_output_classes = 10
         if args.task == "rotation":
+            print("Using 4 output classes for rotation")
             n_output_classes = 4
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
@@ -248,8 +249,11 @@ def main_worker(gpu, ngpus_per_node, args):
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
             
-            
-            assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
+
+            if args.mlp:
+                assert set(msg.missing_keys) == {"fc.0.weight", "fc.0.bias", "fc.1.weight", "fc.1.bias"}
+            else:
+                assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
             print("=> loaded pre-trained model '{}'".format(args.pretrained))
         else:
@@ -289,7 +293,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # optimize only the linear classifier
     parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
-    assert len(parameters) == 2  # fc.weight, fc.bias
+    if args.mlp:
+        assert len(parameters) == 4  # fc.{0,1}.weight, fc.{0,1}.bias
+    else:
+        assert len(parameters) == 2  # fc.weight, fc.bias
     optimizer = torch.optim.SGD(parameters, args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -459,7 +466,7 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
     batch_time = AverageMeter('LinCls Time', ':6.3f')
     data_time = AverageMeter('LinCls Data', ':6.3f')
-    rot_losses = AverageMeter('Rot Val Loss', ':.4e')
+    rot_losses = AverageMeter('Rot Train Loss', ':.4e')
     losses = AverageMeter('LinCls Loss', ':.4e')
     top1 = AverageMeter('LinCls Acc@1', ':6.2f')
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
@@ -490,8 +497,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             output = model(rotated_images)
             loss = criterion(output, target)
             rot_losses.update(loss.item(), images.size(0))
-            acc1 = accuracy(output, target, topk=(1,))
-            acc5 = [100]
+            acc1, acc5 = accuracy(output, target, topk=(1,4))
         else:
             target = target.cuda(args.gpu, non_blocking=True)
 
@@ -545,8 +551,7 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 output = model(rotated_images)
                 loss = criterion(output, target)
                 rot_losses.update(loss.item(), images.size(0))
-                acc1 = accuracy(output, target, topk=(1,))
-                acc5 = [100]
+                acc1, acc5 = accuracy(output, target, topk=(1,4))
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
