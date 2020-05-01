@@ -298,7 +298,7 @@ def main_worker(gpu, ngpus_per_node, args):
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             args.id=checkpoint['id']
-            args.id=checkpoint['name']
+            args.name=checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -488,21 +488,28 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             #     eximg0 = wandb.Image(use_images[0].permute(1,2,0).cpu().numpy())
             #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
             #     wandb.log({"example rotated image": [eximg0, eximg1]})
+            target = rot_classes
             output = model(head="rotnet", im_q=rotated_images)
-            rot_loss = criterion(output, rot_classes)
+            rot_loss = criterion(output, target)
             rot_losses.update(rot_loss.item(), images[0].size(0))
             
         if not args.nomoco:
             output, target = model(head="moco", im_q=images[0], im_k=images[1])
             moco_loss = criterion(output, target)
-
-            # acc1/acc5 are (K+1)-way contrast classifier accuracy
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
             moco_losses.update(moco_loss.item(), images[0].size(0))
-            top1.update(acc1[0], images[0].size(0))
-            top5.update(acc5[0], images[0].size(0))
 
+        # acc1/acc5 are (K+1)-way contrast classifier accuracy
+        # measure accuracy and record loss
+        if args.rotnet:
+            topk=(1,)
+        else:
+            topk=(1,5)
+        accs = accuracy(output, target, topk=topk)
+        top1.update(accs[0][0], output.size(0))
+        if args.rotnet:
+            top5.update(0, output.size(0))
+        else:
+            top5.update(accs[1][0], output.size(0))
 
         optimizer.zero_grad()
         if not args.nomoco and args.rotnet:
