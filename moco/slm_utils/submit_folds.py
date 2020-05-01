@@ -251,30 +251,16 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
 from torchvision.transforms import transforms
 
-def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcrop=False):
-
-    print('args: name, ontopof, randomcrop', name, ontopof_mocov2, randomcrop)
+def load_custom_transforms(randomcrop=False, gauss=False, name='moco_supervised'):
     if randomcrop: 
         random_crop = transforms.RandomCrop(32, padding=4)
     else: 
         random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
 
-    # if not gauss: 
-    #     transform_train = transforms.Compose([
-    #         random_crop,
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-    #     ])
 
-    if ontopof_mocov2: 
+    if not gauss: 
         transform_train = transforms.Compose([
             random_crop,
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
@@ -288,6 +274,8 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
             transforms.ToTensor(),
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
         ])
+        
+
 
     transform_test = transforms.Compose([
         transforms.ToTensor(),
@@ -297,10 +285,6 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
 
     if name == 'moco_supervised': 
     	transform_train.transforms.insert(0, Augmentation(fa_moco_supervised()))
-
-    elif name == 'random_transforms': 
-    	transform_train.transforms.insert(0, Augmentation(fa_random_transforms()))
-
     print(transform_train)
     transform_test = transforms.Compose([
         transforms.ToTensor(),

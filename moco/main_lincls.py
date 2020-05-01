@@ -440,7 +440,12 @@ def main_worker(gpu, ngpus_per_node, args):
             is_best = acc1 > best_acc1
             best_acc1 = max(acc1, best_acc1)
             if is_best:
-                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best.tar".format(args.id[:5]))
+
+                if args.task == "classify": 
+
+                    savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best.tar".format(args.id[:5]))
+                elif args.task == "rotation": 
+                    savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best_rotation.tar".format(args.id[:5]))
                 torch.save({
                     'epoch': epoch + 1,
                     'arch': args.arch,
@@ -532,11 +537,7 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 images = images.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            if args.task=="rotation":
-                rotated_images, target = rotate_images(images)
-                output = model(rotated_images)
-                loss = criterion(output, target)
-                rot_losses.update(loss.item(), images.size(0))            
+         
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)

@@ -63,6 +63,7 @@ class Args:
     resume=False
     arch = 'resnet50'
     distributed=False
+    loss = 'rotation' # one of rotation, supervised, ICL, icl_and_rotation.
 args=Args()
 
 
@@ -200,7 +201,7 @@ def load_base_model(cv_fold):
             msg = model.load_state_dict(state_dict, strict=False)
             assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
-def load_model(cv_fold): 
+def load_model(cv_fold, loss_type): 
     model = models.__dict__[args.arch]()
     # CIFAR 10 mod
     
@@ -221,8 +222,12 @@ def load_model(cv_fold):
 #         print(model.fc)
 
 
-    savefile = os.path.join(args.checkpoint_fp, 
-                            "{}_lincls_best.tar".format(args.checkpoints[cv_fold]))
+    if loss_type == 'supervised': 
+        savefile = os.path.join(args.checkpoint_fp, 
+                                "{}_lincls_best.tar".format(args.checkpoints[cv_fold]))
+    elif loss_type == 'rotation': 
+        savefile = os.path.join(args.checkpoint_fp, 
+                                 "{}_lincls_best_rotation.tar".format(args.checkpoints[cv_fold]))
 
     ckpt = torch.load(savefile, map_location="cpu")
     
@@ -244,6 +249,28 @@ def load_model(cv_fold):
 
     # Load the FC layer and append it to the end. 
 
+def rotate_images(images):
+    nimages = images.shape[0]
+    n_rot_images = 4*nimages
+
+    # rotate images all 4 ways at once
+    rotated_images = torch.zeros([n_rot_images, images.shape[1], images.shape[2], images.shape[3]]).cuda()
+    rot_classes = torch.zeros([n_rot_images]).long().cuda()
+
+    rotated_images[:nimages] = images
+    # rotate 90
+    rotated_images[nimages:2*nimages] = images.flip(3).transpose(2,3)
+    rot_classes[nimages:2*nimages] = 1
+    # rotate 180
+    rotated_images[2*nimages:3*nimages] = images.flip(3).flip(2)
+    rot_classes[2*nimages:3*nimages] = 2
+    # rotate 270
+    rotated_images[3*nimages:4*nimages] = images.transpose(2,3).flip(3)
+    rot_classes[3*nimages:4*nimages] = 3
+
+    return rotated_images, rot_classes
+
+
 def eval_augmentations(config): 
     augment = config
     print('called', augment)
@@ -252,7 +279,8 @@ def eval_augmentations(config):
     fold = augment['cv_fold']
     ckpt = args.checkpoint_fp + 'fold_%d.tar' %(fold)
 
-    model = load_model(cv_fold).cuda()
+    model = load_model(cv_fold, args.loss).cuda()
+    model.eval()
     loaders = []
 #     TODO: Undo this
     for _ in range(args.num_policy): 
@@ -263,37 +291,46 @@ def eval_augmentations(config):
 
     metrics = Accumulator()
     loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+
     try: 
-        while True: 
-            losses = []
-            corrects = []
+        with torch.no_grad(): 
+            while True: 
+                losses = []
+                corrects = []
 
-            for loader in loaders:
-                data, label = next(loader)
-                data = data.cuda()
-                label = label.cuda()
-                pred = model(data)
+                for loader in loaders:
+                    data, label = next(loader)
+                    data = data.cuda()
+                    label = label.cuda()
 
-                loss = loss_fn(pred, label)
-                losses.append(loss.detach().cpu().numpy())
+                    if args.loss == 'supervised':
+                        pred = model(data)
 
-                _, pred = pred.topk(1, 1, True, True)
-                pred = pred.t()
-                correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
-                corrects.append(correct)
+                    if args.loss =="rotation":
+                        rotated_images, label = rotate_images(data)
+                        pred = model(rotated_images)   
+                   
 
-                del loss, correct, pred, data, label
+                    loss = loss_fn(pred, label)
+                    losses.append(loss.detach().cpu().numpy())
 
-            losses = np.concatenate(losses)
-            losses_min = np.min(losses, axis=0).squeeze()
+                    _, pred = pred.topk(1, 1, True, True)
+                    pred = pred.t()
+                    correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
+                    corrects.append(correct)
 
-            corrects = np.concatenate(corrects)
-            corrects_max = np.max(corrects, axis=0).squeeze()
-            metrics.add_dict({ 
-                'minus_loss': -1*np.sum(losses_min),
-                'correct': np.sum(corrects_max),
-                'cnt': len(corrects_max)})
-            del corrects, corrects_max
+                    del loss, correct, pred, data, label
+
+                losses = np.concatenate(losses)
+                losses_min = np.min(losses, axis=0).squeeze()
+
+                corrects = np.concatenate(corrects)
+                corrects_max = np.max(corrects, axis=0).squeeze()
+                metrics.add_dict({ 
+                    'minus_loss': -1*np.sum(losses_min),
+                    'correct': np.sum(corrects_max),
+                    'cnt': len(corrects_max)})
+                del corrects, corrects_max
     
     except StopIteration: 
         pass
@@ -327,9 +364,9 @@ from ray import tune
 cv_num = 5
 num_result_per_cv = 10
 
-for _ in range(1): 
+for _ in range(2): 
     for cv_fold in range(cv_num): 
-        name = "slm_search_%s_fold_%d" %(args.dataid, cv_fold)
+        name = "slm_rotnet_search_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
             max_concurrent=4,
             metric=reward_attr,

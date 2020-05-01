@@ -346,7 +346,7 @@ def main_worker(gpu, ngpus_per_node, args):
         transformations = moco.loader.TwoCropsTransform(augmentation)
 
     elif not args.custom_aug_name == None: 
-        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(args.custom_aug_name)
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
         transformations = moco.loader.TwoCropsTransform(augmentation)
 
     elif args.rand_aug:
