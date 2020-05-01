@@ -433,7 +433,10 @@ def main_worker(gpu, ngpus_per_node, args):
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
-            wandb.log({"val-{}".format(args.task): acc1})
+            val_str = "val-{}"
+            if args.mlp:
+                val_str = "val-mlp-{}"
+            wandb.log({val_str.format(args.task): acc1})
 
         # remember best acc@1 and save checkpoint
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
