@@ -293,7 +293,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # optionally resume from a checkpoint
     if args.resume:
-        if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
                 checkpoint = torch.load(args.resume)
@@ -491,7 +490,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             rot_losses.update(loss.item(), images.size(0))            
         else:
             target = target.cuda(args.gpu, non_blocking=True)
-
             # compute output
             output = model(images)
             loss = criterion(output, target)

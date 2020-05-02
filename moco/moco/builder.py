@@ -150,16 +150,16 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, head, im_q, im_k=None):
+    def forward(self, head, im_q, im_k=None, evaluate=False):
         if head=="moco":
-            return self.moco_forward(im_q, im_k)
+            return self.moco_forward(im_q, im_k, evaluate)
         elif head=="rotnet":
             return self.model[head](self.model["encoder"](im_q))
         else:
             raise NotImplementedError("The following head has not been implemented: {}".forward(head))
         
     
-    def moco_forward(self, im_q, im_k):
+    def moco_forward(self, im_q, im_k, evaluate=False):
         """
         Input:
             im_q: a batch of query images
@@ -176,16 +176,20 @@ class MoCo(nn.Module):
 
         # compute key features
         with torch.no_grad():  # no gradient to keys
-            self._momentum_update_key_encoder()  # update the key encoder
+
+            if not evaluate: 
+                self._momentum_update_key_encoder()  # update the key encoder
 
             # shuffle for making use of BN
-            im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+            if not evaluate: 
+                im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
             k = self.encoder_k(im_k)  # keys: NxC
             k = nn.functional.normalize(k, dim=1)
 
             # undo shuffle
-            k = self._batch_unshuffle_ddp(k, idx_unshuffle)
+            if not evaluate: 
+                k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
         # compute logits
         # Einstein sum is more intuitive
@@ -204,7 +208,8 @@ class MoCo(nn.Module):
         labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
 
         # dequeue and enqueue
-        self._dequeue_and_enqueue(k)
+        if not evaluate:
+            self._dequeue_and_enqueue(k)
 
         return logits, labels
 
