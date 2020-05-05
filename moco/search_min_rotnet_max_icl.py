@@ -147,9 +147,7 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
                                                      transform=transform_train,
                                                      download=True)
 
-    # NOTE THAT IN THE FAA PAPER THE USED TRANSFORM TRAIN.  
-    
-    
+    # In FAA They use Train Transform as well. 
     val_dataset = torchvision.datasets.CIFAR10(args.data, transform=transform_train, 
         download=True)
     
@@ -172,18 +170,10 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
             train_dataset, batch_size=batch, shuffle=(train_sampler is None),
             num_workers=8, pin_memory=True, sampler=train_sampler, drop_last=True)
 
-        
-    if loss_type == 'icl': 
-        sampler =None
-        drop_last=False
-    else: 
-        sampler =None
-        drop_last=False
-
     val_loader= torch.utils.data.DataLoader(
         val_dataset, batch_size=batch, shuffle=True,
-        num_workers=4, pin_memory=True, drop_last=drop_last, 
-        sampler=sampler
+        num_workers=4, pin_memory=True, drop_last=False, 
+        sampler=None
     )
 
     if not get_train: 
@@ -191,7 +181,7 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
 
     return train_loader, val_loader
 
-# Take in the augment from hyperopt and return some augmentations, in teh way that we want them. 
+#  Go from the hyperopt parameters to the actual policy. 
 def policy_decoder(augment, num_policy, num_op):
     op_list = augment_list(False)
     policies = []
@@ -205,12 +195,13 @@ def policy_decoder(augment, num_policy, num_op):
         policies.append(ops)
     return policies
 
+
+
 def find_model(name, fold, epochs=750, basepath="/userdata/smetzger/all_deepul_files/ckpts"):
     """
     name = model name
     fold = which fold of the data to find. 
     epochs = how many epochs to load the checkpoint at (e.g. 750)
-    
     """
     for file in os.listdir(basepath):
         if name in str(file) and 'fold_%d' %fold in str(file):
@@ -218,16 +209,11 @@ def find_model(name, fold, epochs=750, basepath="/userdata/smetzger/all_deepul_f
                 return os.path.join(basepath, file)
             
     print("COULDNT FIND MODEL")
-    assert True==False # just throw an error. 
-
-    
     
 
 def load_model(cv_fold, loss_type): 
     
-    print("HELLO")
     model = models.__dict__[args.arch]()
-    # CIFAR 10 model
     
     if args.dataid =="cifar10":
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
@@ -246,7 +232,7 @@ def load_model(cv_fold, loss_type):
         elif loss_type =='rotation': 
             model.fc = torch.nn.Linear(model.fc.in_features, 4)
 
-
+    # Load the checkpoints. 
     if loss_type == 'supervised': 
         savefile = os.path.join(args.checkpoint_fp, 
                                 "{}_lincls_best.tar".format(args.checkpoints[cv_fold]))
@@ -254,16 +240,13 @@ def load_model(cv_fold, loss_type):
         savefile = os.path.join(args.checkpoint_fp, 
                                  "{}_lincls_best_rotation.tar".format(args.checkpoints[cv_fold]))
 
-    elif loss_type == 'icl' or loss_type == 'icl_and_rotation': 
-#         print('ICL')
+    elif loss_type == 'icl': 
         heads = {}
         if not args.nomoco:
             heads["moco"] = {
             "num_classes": args.moco_dim
         }
         
-#         print(heads)
-
         model = moco.builder.MoCo(
             models.__dict__[args.arch],
             K=args.moco_k, m=args.moco_m, T=args.moco_t, mlp=args.mlp, dataid=args.dataid,
@@ -271,18 +254,14 @@ def load_model(cv_fold, loss_type):
         )
         savefile = find_model(args.checkpoints[cv_fold], cv_fold)
         
-#     print('savefile', savefile)
     ckpt = torch.load(savefile, map_location="cpu")
-    
     state_dict = ckpt['state_dict']
     
     for k in list(state_dict.keys()):
-        # retain only encoder_q up to before the embedding layer
         if k.startswith('module'):
             state_dict[k[len("module."):]] = state_dict[k] 
             del state_dict[k]
 
-                
     model.load_state_dict(state_dict)
     return model
 
@@ -331,32 +310,30 @@ def accuracy(output, target, topk=(1,)):
 def eval_augmentations(config): 
     augment = config
     print('called', augment)
-    
+
+    # If we have ICL and rotation, loop over the two because of the different way we evaluate
+    # Either on top of the mocov2 augs, or on top of the lincls train augs. 
     if args.loss == 'icl_and_rotation':
-        
         losses = ['icl', 'rotation']
-        
     else: 
         losses = [args.loss]
-        
-    
+
     metrics = Accumulator()
     
     for loss_type in losses: 
-        # TODO MOve this out
-#         metrics = Accumulator()
       
         print(loss_type)
-        
         augmentations = policy_decoder(augment, augment['num_policy'], augment['num_op'])
         
-        
         fold = augment['cv_fold']
-        model = load_model(cv_fold, loss_type).cuda()
+
+        # Load the model, either the rotnet/lincls head, or the full MoCo model.
+        model = load_model(fold, loss_type).cuda()
+
         model.eval()
         loaders = []
 
-        for _ in range(args.num_policy): #TODO: 
+        for _ in range(args.num_policy): # there was a todo in the original moco code. basically we just load 5 loaders.
             _, validloader = get_dataloaders(augmentations, 512, kfold=fold, loss_type=loss_type)
             loaders.append(iter(validloader))
             del _
@@ -365,8 +342,6 @@ def eval_augmentations(config):
         loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
 
         try: 
-
-            i = 0
             with torch.no_grad(): 
                 while True: 
                     losses = []
@@ -411,14 +386,16 @@ def eval_augmentations(config):
 
 
                     losses = np.concatenate(losses)
-#                     print('losses shape' , losses.shape)
-                    losses_min = np.mean(losses) # get it so it averages out.
+#                     print('losses shape' , losses.shape) This would usually just be 5*512, 
+                    losses_min = np.mean(losses) # get it so it averages out intead of taking the smallest losses. 
                     corrects = np.concatenate(corrects)
-                    corrects_max = np.max(corrects, axis=0).squeeze()
+                    corrects_max = np.max(corrects, axis=0).squeeze() # 5, 512, 
 #                     print('len corrects max', len(corrects_max), 'corrects shape', corrects.shape)
-                    losses_min *= losses.shape[0]/5
+                    losses_min *= losses.shape[0]/5 # Divide by the losses we're using. 
                     
                     if loss_type == 'rotation': 
+
+                        # Scale the loss by 1/4 since there are 4x as many samples. 
                         metrics.add_dict({ 
                             'minus_loss': -.25*np.sum(losses_min)*args.loss_weights[loss_type],
                             'plus_loss': np.sum(losses_min)*args.loss_weights[loss_type],
@@ -432,15 +409,14 @@ def eval_augmentations(config):
                             'correct': np.sum(corrects_max)*args.loss_weights[loss_type],
                             'cnt': len(corrects_max)})
                         del corrects, corrects_max
-
-#                     print(metrics['minus_loss']/metrics['cnt'])
         except StopIteration: 
             pass
     
     del model
     metrics = metrics/'cnt'
+
+    # This is what it keeps track of for hyperopting. 
     tune.track.log(top_1_valid=metrics['correct'], minus_loss=metrics['minus_loss'], plus_loss=metrics['plus_loss'])
-    print(metrics['correct'])
     return metrics['minus_loss']
 
 ops = augment_list(False) # Get the default augmentation set. 
@@ -453,36 +429,28 @@ for i in range(args.num_policy):
         space['level_%d_%d' %(i, j)] = hp.uniform('level_%d_%d' %(i, j), 0.0, 1.0)
 
 final_policy_set = []
-
-# if not args.loss == 'icl': 
-#     reward_attr = 'minus_loss'
-# else: 
-#     reward_attr = 'minus_loss'
     
-reward_attr = 'top_1_valid'
+reward_attr = 'minus_loss' 
 
-# TODO: let this be whatever we want. 
-object_store_memory = int(0.6 * ray.utils.get_system_memory() // 10 ** 9 * 10 ** 9)
-
-# TODO Change back
+# Initialize ray cluster. 
 ray.init(num_gpus=4, ignore_reinit_error=True, 
     num_cpus=28
     )
-# ray.init(num_gpus=1, memory=200*1024*1024*100, object_store_memory=200*1024*1024*50)
+
+
 import ray
 from ray import tune
 
 cv_num = 5
 num_result_per_cv = 10
 
-for _ in range(2): 
-    for cv_fold in range(cv_num): 
-        name = "slm_moco_min_max_top1valid_%s_fold_%d" %(args.dataid, cv_fold)
+for _ in range(2):  # 2 experiments from FAA. 
+    for cv_fold in range(cv_num): # For the 5 folds. 
+        name = "slm_moco_min_max_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
             max_concurrent=4,
             metric=reward_attr,
             mode='max')
-
 
         results = tune.run(
             eval_augmentations, 
@@ -508,8 +476,7 @@ for _ in range(2):
         for result in results[:num_result_per_cv]: 
             final_policy = policy_decoder(result.config, args.num_policy, args.num_op)
             final_policy_set.extend(final_policy)
-
-        print(final_policy)
+            
 print(final_policy_set)
 
 # Start saving to a path called policies. 
