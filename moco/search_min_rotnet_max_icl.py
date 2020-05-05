@@ -103,8 +103,9 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
             traindir,
             transformations)
 
-        # TODO: add imagenet transforms etc. 
     elif args.dataid == "cifar10":
+
+        # THe default training transforms we use when training the CIFAR10 network. 
         transform_train = transforms.Compose([
             transforms.RandomResizedCrop(28, scale=(0.2, 1.)),
             transforms.RandomHorizontalFlip(),
@@ -112,6 +113,8 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
         ])
         
+
+        # If we're evaluating ICL, its only fair to do so with the ICL augmentations
         if loss_type == "icl": 
             
             random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
@@ -127,20 +130,14 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
             transforms.ToTensor(),
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
             ])
-            
-#TODO UNCOMMENT THIS SHIT!!
+
+
+        # Insert the new transforms in to the training transforms. 
         transform_train.transforms.insert(0, Augmentation(augmentations))
         
-        
+        # Use the twocrops transform. 
         if loss_type == "icl": 
             transform_train = moco.loader.TwoCropsTransform(transform_train)
-        
-        transform_test = transforms.Compose([
-            transforms.Resize(32),
-            transforms.CenterCrop(28),
-            transforms.ToTensor(),
-            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-        ])
 
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
