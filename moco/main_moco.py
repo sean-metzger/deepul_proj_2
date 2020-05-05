@@ -54,6 +54,8 @@ parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb pro
 parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
+parser.add_argument('--image-log-interval', default=10, type=int,
+                    help='how often to log example images')
 
 
 ################
@@ -153,10 +155,14 @@ parser.add_argument('--gauss', action='store_true',
 parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
 parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
 parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
+
 parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
 
 parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
 parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
+
+parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugment orginal transforms')
+
 
 
 ngpus_per_node = torch.cuda.device_count()
@@ -357,7 +363,7 @@ def main_worker(gpu, ngpus_per_node, args):
             for opt_key, opt_val in checkpoint['optimizers']:
                 optimizers[opt_key].load_state_dict(opt_val)
             args.id=checkpoint['id']
-            args.id=checkpoint['name']
+            args.name=checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -394,6 +400,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
             ], p=0.8),
             transforms.RandomGrayscale(p=0.2),
+            # TODO is this right for cifar10?
             transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
@@ -408,6 +415,15 @@ def main_worker(gpu, ngpus_per_node, args):
         augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
         transformations = moco.loader.TwoCropsTransform(augmentation)
 
+    elif args.rand_aug_orig:
+        print("Using random aug original")
+        augmentation = [
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]    
 
     elif args.rand_aug:
         print("Using random aug")
@@ -448,7 +464,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
-            traindir,
+            args.data,
             transformations)
     elif args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
@@ -521,7 +537,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print("Done - wrapping up")
 
 
-def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_ID):
+def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -532,12 +548,11 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
     progress = ProgressMeter(
         args.multiprocessing_distributed and args.gpu == 0,
         len(train_loader),
-        [batch_time, data_time, losses, rot_losses, top1, top5, moco_losses],
+        [batch_time, data_time, losses, rot_losses, top1, top5],
         prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
 
     # switch to train mode
-    for model in models.values():
-        model.train()
+    model.train()
 
     end = time.time()
     for i, (images, _) in enumerate(train_loader):
@@ -548,6 +563,10 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
+        if i == 0 and epoch % args.image_log_interval == 0 and args.multiprocessing_distributed and args.gpu == 0:
+            eximg0 = wandb.Image(images[0][0].permute(1,2,0).cpu().numpy())
+            eximg1 = wandb.Image(images[1][0].permute(1,2,0).cpu().numpy())
+            wandb.log({"example comparison image": [eximg0, eximg1]})
         
         # compute output
         if args.rotnet:
@@ -575,39 +594,41 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
             #     eximg1 = wandb.Image(rotated_images[0].permute(1,2,0).cpu().numpy())
             #     wandb.log({"example rotated image": [eximg0, eximg1]})
             target = rot_classes
-            output = models["rotnet"](models["encoder"](rotated_images))
+            output = model(head="rotnet", im_q=rotated_images)
             rot_loss = criterion(output, target)
-            optimizers["rotnet"].zero_grad()
-            rot_loss.backward()
-            optimizers["rotnet"].step()
-            rot_losses.update(rot_loss.item(), rotated_images.size(0))
+            rot_losses.update(rot_loss.item(), images[0].size(0))
             
         if not args.nomoco:
-            output, target = models["moco"](models["encoder"], im_q=images[0], im_k=images[1])
+            output, target = model(head="moco", im_q=images[0], im_k=images[1])
             moco_loss = criterion(output, target)
-            optimizers["moco"].zero_grad()
-            moco_loss.backward()
-            optimizers["moco"].step()
-
-            # acc1/acc5 are (K+1)-way contrast classifier accuracy
-            # measure accuracy and record loss
             moco_losses.update(moco_loss.item(), images[0].size(0))
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        top1.update(acc1[0], images[0].size(0))
-        top5.update(acc5[0], images[0].size(0))
+        # acc1/acc5 are (K+1)-way contrast classifier accuracy
+        # measure accuracy and record loss
+        if args.rotnet:
+            topk=(1,)
+        else:
+            topk=(1,5)
+        accs = accuracy(output, target, topk=topk)
+        top1.update(accs[0][0], output.size(0))
+        if args.rotnet:
+            top5.update(0, output.size(0))
+        else:
+            top5.update(accs[1][0], output.size(0))
 
-
+        optimizer.zero_grad()
         if not args.nomoco and args.rotnet:
-            comb_loss = rot_loss + moco_loss
-            loss = comb_loss.item()
+            rot_loss.backward(retain_graph=True)
+            moco_loss.backward()
+            loss = rot_loss.item() + moco_loss.item()
         elif not args.nomoco:
+            moco_loss.backward()
             loss = moco_loss.item()
         elif args.rotnet:
+            rot_loss.backward()
             loss = rot_loss.item()
         losses.update(loss)
-        
-
+        optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -615,7 +636,6 @@ def train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_I
 
         if i % args.print_freq == 0:
             progress.display(i)
-
 
 
 class AverageMeter(object):

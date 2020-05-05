@@ -112,7 +112,6 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-<<<<<<< HEAD
     def forward(self, head, im_q, im_k=None, evaluate=False):
         if head=="moco":
             return self.moco_forward(im_q, im_k, evaluate)
@@ -123,9 +122,6 @@ class MoCo(nn.Module):
         
     
     def moco_forward(self, im_q, im_k, evaluate=False):
-=======
-    def forward(self, encoder, im_q, im_k):
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
         """
         Input:
             im_q: a batch of query images
