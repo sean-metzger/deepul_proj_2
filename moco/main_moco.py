@@ -147,7 +147,7 @@ parser.add_argument('--nomoco', action='store_true', help='set true to **not** h
 parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
 parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
 parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
-
+parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugment orginal transforms')
 
 
 
@@ -334,6 +334,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
             ], p=0.8),
             transforms.RandomGrayscale(p=0.2),
+            # TODO is this right for cifar10?
             transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
@@ -342,6 +343,15 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
+    elif args.rand_aug_orig:
+        print("Using random aug original")
+        augmentation = [
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]    
     elif args.rand_aug:
         print("Using random aug")
         augmentation = [
@@ -351,6 +361,7 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]    
+        
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -368,7 +379,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
-            traindir,
+            args.data,
             transformations)
     elif args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,

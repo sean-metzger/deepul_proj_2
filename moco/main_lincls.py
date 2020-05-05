@@ -560,8 +560,8 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 acc1, acc5 = accuracy(output, target, topk=(1, 5))
             # measure accuracy and record loss
             
-            top1.update(acc1[0], output.size(0))
-            top5.update(acc5[0], output.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
