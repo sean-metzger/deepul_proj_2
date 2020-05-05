@@ -25,10 +25,9 @@ def find_model(name, fold, epochs, basepath="/userdata/smetzger/all_deepul_files
 base_name = 'resnet50_750epochs_512bsz_0.4000lr_0.9000mtm_120-160sched_128.0000mocod_65536mocok_0.9990mocom_0.2000mocot_1.000e-04wd_mlp_augplus_cos'
 checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 epochs = 750
-task = 'rotation'
 
 for fold in range (5): 
-    filename = '/userdata/smetzger/all_deepul_files/runs/lincls' + base_name + '_fold_%d' %fold + '.txt'
+    filename = '/userdata/smetzger/all_deepul_files/runs/lincls' + base_name + '_fold_%d' %fold + 'classify_kfold_minloss.txt'
     string = "submit_job -q mind-gpu"
     string += " -m 318 -g 4"
     string += " -o " + filename
@@ -39,9 +38,10 @@ for fold in range (5):
     string += " -a resnet50 --lr 15.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
     string += ' --checkpoint_fp ' + str(checkpoint_fp)
     string += ' --rank 0'
-    string += ' --pretrained ' + str(find_model(base_name, fold, epochs, basepath=checkpoint_fp))
-    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_rotnet_head_on_mocov2'"
-    string += ' --task rotation'
+    string += ' --pretrained ' + str(find_model(base_name, fold, 750))
+    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_lincls_on_rotnet kfolds'"
+    string += " --kfold %d" %fold
+    string += " --task classify"
 
     cmd = shlex.split(string)
     print(cmd)

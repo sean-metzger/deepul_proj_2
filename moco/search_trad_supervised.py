@@ -48,7 +48,7 @@ class Args:
     resume=False
     arch = 'resnet50'
     distributed=False
-    loss = 'rotation'# one of rotation, supervised, icl, icl_and_rotation.
+    loss = 'supervised'# one of rotation, supervised, icl, icl_and_rotation.
     base = 'moco' # Name for what we are saving our training runs as.
 
     # Moco args. 
@@ -175,10 +175,10 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
         
     if args.loss == 'icl': 
         sampler =None
-        drop_last=True
+        drop_last=False
     else: 
         sampler =None
-        drop_last=True
+        drop_last=False
 
     val_loader= torch.utils.data.DataLoader(
         val_dataset, batch_size=batch, shuffle=True,
@@ -338,11 +338,11 @@ def eval_augmentations(config):
     ckpt = args.checkpoint_fp + 'fold_%d.tar' %(fold)
 
     model = load_model(cv_fold, args.loss).cuda()
-    # model.eval()
+    model.eval()
     loaders = []
     
     for _ in range(args.num_policy): #TODO: 
-        _, validloader = get_dataloaders(augmentations, 128, kfold=fold)
+        _, validloader = get_dataloaders(augmentations, 512, kfold=fold)
         loaders.append(iter(validloader))
         del _
 
@@ -452,7 +452,7 @@ final_policy_set = []
 if not args.loss == 'icl': 
     reward_attr = 'minus_loss'
 else: 
-    reward_attr = 'top_1_valid'
+    reward_attr = 'minus_loss'
     
     
 # TODO: let this be whatever we want. 
@@ -469,7 +469,7 @@ num_result_per_cv = 10
 
 for _ in range(2): 
     for cv_fold in range(cv_num): 
-        name = "slm_moco_min_rotloss_search_%s_fold_%d" %(args.dataid, cv_fold)
+        name = "slm_moco_min_superloss_search_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
             max_concurrent=4,
             metric=reward_attr,

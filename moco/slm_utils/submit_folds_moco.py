@@ -31,11 +31,11 @@ base_name = '750epochs_512bsz_0.4000lr_mlp_cos_rotnet'
 # Notes: This is the setup used to get the 5 folds of the rotnet for our evaluation of rotation predictions
 
 for fold in range (5): 
-    filename = '/userdata/smetzger/all_deepul_files/runs/restore_mocorotnet_only_fold_%d' %fold + '.txt'
+    filename = '/userdata/smetzger/all_deepul_files/runs/randresizedcrop_only_fold_%d' %fold + '.txt'
     string = "submit_job -q mind-gpu"
     string += " -m 318 -g 4"
     string += " -o " + filename
-    string += ' -n kf_lincls'
+    string += ' -n rrc'
     string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_moco.py'
 
     # add all the default args: 
@@ -43,11 +43,12 @@ for fold in range (5):
     string += ' --moco-t 0.2' # MoCov2 arguments. 
     string += ' --checkpoint_fp ' + str(checkpoint_fp)
     string += ' --rank 0'
-    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'kfold_rotation_head'"
+    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'KFOLDS for randomresizecrop'"
 
 
     # THIS LINE IS HUGE: TRAIN THE ROTNET HEAD.
-    string += ' --rotnet --nomoco' # We are only training rotnets. 
+    # string += ' --rotnet --nomoco' # We are only training rotnets. 
+    string += ' --rand_resize_only'
     string += ' --mlp --cos --epochs 750'
     string += ' --kfold %d' %fold # FUCK!!!!
 

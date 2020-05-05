@@ -48,7 +48,7 @@ class Args:
     resume=False
     arch = 'resnet50'
     distributed=False
-    loss = 'rotation'# one of rotation, supervised, icl, icl_and_rotation.
+    loss = 'icl_and_rotation'# one of rotation, supervised, icl, icl_and_rotation.
     base = 'moco' # Name for what we are saving our training runs as.
 
     # Moco args. 
@@ -67,6 +67,10 @@ class Args:
     moco_dim = 128
     policy_dir = '/userdata/smetzger/all_deepul_files/policies'
     
+    # Remember we are trying to max negative loss, so a negative here
+    # is like maximizing, a positive here is like minimizing. 
+    loss_weights = {'rotation': 2, 'icl': -1, 'supervised':1} # weight for ICL, and ROTATION. Divide by mean.
+
     
 args=Args()
 print('args', args)
@@ -85,7 +89,7 @@ from self_aug.autoaug_scripts import augment_list, Augmentation, Accumulator
 # Define how we load our dataloaders. 
 _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
-def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
+def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_train=False):
 
     """
     input: augmentations: the list of the augmentations you want applied to the data. 
@@ -108,7 +112,7 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
         ])
         
-        if args.loss == "icl": 
+        if loss_type == "icl": 
             
             random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
             
@@ -124,11 +128,11 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
             transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
             ])
             
-
+#TODO UNCOMMENT THIS SHIT!!
         transform_train.transforms.insert(0, Augmentation(augmentations))
         
         
-        if args.loss == "icl": 
+        if loss_type == "icl": 
             transform_train = moco.loader.TwoCropsTransform(transform_train)
         
         transform_test = transforms.Compose([
@@ -152,7 +156,6 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
     val_dataset = torchvision.datasets.CIFAR10(args.data, transform=transform_train, 
         download=True)
     
-    
 
     if get_train: 
         torch.manual_seed(1337)
@@ -173,12 +176,12 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, get_train=False):
             num_workers=8, pin_memory=True, sampler=train_sampler, drop_last=True)
 
         
-    if args.loss == 'icl': 
+    if loss_type == 'icl': 
         sampler =None
-        drop_last=True
+        drop_last=False
     else: 
         sampler =None
-        drop_last=True
+        drop_last=False
 
     val_loader= torch.utils.data.DataLoader(
         val_dataset, batch_size=batch, shuffle=True,
@@ -220,6 +223,9 @@ def find_model(name, fold, epochs=750, basepath="/userdata/smetzger/all_deepul_f
     print("COULDNT FIND MODEL")
     assert True==False # just throw an error. 
 
+    
+    
+
 def load_model(cv_fold, loss_type): 
     
     print("HELLO")
@@ -251,7 +257,7 @@ def load_model(cv_fold, loss_type):
         savefile = os.path.join(args.checkpoint_fp, 
                                  "{}_lincls_best_rotation.tar".format(args.checkpoints[cv_fold]))
 
-    elif loss_type == 'icl': 
+    elif loss_type == 'icl' or loss_type == 'icl_and_rotation': 
 #         print('ICL')
         heads = {}
         if not args.nomoco:
@@ -276,10 +282,6 @@ def load_model(cv_fold, loss_type):
     for k in list(state_dict.keys()):
         # retain only encoder_q up to before the embedding layer
         if k.startswith('module'):
-#             print(k)
-            # remove prefix
-            
-
             state_dict[k[len("module."):]] = state_dict[k] 
             del state_dict[k]
 
@@ -332,111 +334,117 @@ def accuracy(output, target, topk=(1,)):
 def eval_augmentations(config): 
     augment = config
     print('called', augment)
-    augmentations = policy_decoder(augment, augment['num_policy'], augment['num_op'])
-    # Load the model from wandb. 
-    fold = augment['cv_fold']
-    ckpt = args.checkpoint_fp + 'fold_%d.tar' %(fold)
-
-    model = load_model(cv_fold, args.loss).cuda()
-    # model.eval()
-    loaders = []
     
-    for _ in range(args.num_policy): #TODO: 
-        _, validloader = get_dataloaders(augmentations, 128, kfold=fold)
-        loaders.append(iter(validloader))
-        del _
-
-           
+    if args.loss == 'icl_and_rotation':
         
+        losses = ['icl', 'rotation']
+        
+    else: 
+        losses = [args.loss]
+        
+    
     metrics = Accumulator()
-    loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
     
-
-    try: 
+    for loss_type in losses: 
+        # TODO MOve this out
+#         metrics = Accumulator()
+      
+        print(loss_type)
         
-        i = 0
-        with torch.no_grad(): 
-            while True: 
-                losses = []
-                corrects = []
-
-                for loader in loaders:
-                    
-                    if not args.loss == 'icl':
-                        
-                        
-                        data, label = next(loader)
-                        data = data.cuda()
-                        label = label.cuda()
-
-                        if args.loss == 'supervised':
-                            pred = model(data)
-
-                        if args.loss =="rotation":
-                            rotated_images, label = rotate_images(data)
-                            pred = model(rotated_images)  
-                            
-                    else: 
-                        
-                        images, _ = next(loader)
-                        images[0] = images[0].cuda(non_blocking=True)
-                        images[1] = images[1].cuda(non_blocking=True)
-#                         print(images[0] == images[1])
-                        pred, label =model(head="moco", im_q=images[0], im_k=images[1], evaluate=True)
-                        
-                        acc = accuracy(pred, label)
-            
-#                         print(acc)
-
-
-                    loss = loss_fn(pred, label)
-                    losses.append(loss.detach().cpu().numpy())
-
-                    _, pred = pred.topk(1, 1, True, True)
-                    pred = pred.t()
-                    correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
-                    corrects.append(correct)
-                    
-                    if not args.loss == 'icl':
-                        del loss, correct, pred, data, label
-                    else: 
-                        del loss, images, pred, label, correct
-    
-    
-    
-                losses = np.concatenate(losses)
-#                 print(losses.shape)
-#                 print('mean loss', np.mean(losses))
-                
-                
-                
-                #losses_min = np.min(losses, axis=0).squeeze()
-                
-                losses_min = np.mean(losses) # get it so it averages out.
-                corrects = np.concatenate(corrects)
-#                 print(corrects.shape)
-#                 print('corrects[0]', corrects[0])
-                corrects_max = np.max(corrects, axis=0).squeeze()
-                losses_min *= len(corrects_max)
-                metrics.add_dict({ 
-                    'minus_loss': -1*np.sum(losses_min),
-                    'plus_loss': np.sum(losses_min),
-                    'correct': np.sum(corrects_max),
-                    'cnt': len(corrects_max)})
+        augmentations = policy_decoder(augment, augment['num_policy'], augment['num_op'])
         
-#                 print(metrics['minus_loss'])
-                del corrects, corrects_max
+        
+        fold = augment['cv_fold']
+        model = load_model(cv_fold, loss_type).cuda()
+        model.eval()
+        loaders = []
 
+        for _ in range(args.num_policy): #TODO: 
+            _, validloader = get_dataloaders(augmentations, 512, kfold=fold, loss_type=loss_type)
+            loaders.append(iter(validloader))
+            del _
+
+     
+        loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+
+        try: 
+
+            i = 0
+            with torch.no_grad(): 
+                while True: 
+                    losses = []
+                    corrects = []
+
+                    for loader in loaders:
+
+                        if not loss_type == 'icl':
+
+                            data, label = next(loader)
+                            data = data.cuda()
+                            label = label.cuda()
+
+                            if loss_type == 'supervised':
+                                pred = model(data)
+
+                            if loss_type =="rotation":
+                                rotated_images, label = rotate_images(data)
+                                pred = model(rotated_images)  
+
+                        else: 
+
+                            images, _ = next(loader)
+                            images[0] = images[0].cuda(non_blocking=True)
+                            images[1] = images[1].cuda(non_blocking=True)
+                            pred, label =model(head="moco", im_q=images[0], im_k=images[1], evaluate=True)
+                            acc = accuracy(pred, label)
+
+                        loss = loss_fn(pred, label)
+                        losses.append(loss.detach().cpu().numpy())
+
+                        _, pred = pred.topk(1, 1, True, True)
+                        pred = pred.t()
+                        correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
+                        corrects.append(correct)
+
+                        if not loss_type == 'icl':
+                            del loss, correct, pred, data, label
+                        else: 
+                            del loss, images, pred, label, correct
+
+
+
+                    losses = np.concatenate(losses)
+#                     print('losses shape' , losses.shape)
+                    losses_min = np.mean(losses) # get it so it averages out.
+                    corrects = np.concatenate(corrects)
+                    corrects_max = np.max(corrects, axis=0).squeeze()
+#                     print('len corrects max', len(corrects_max), 'corrects shape', corrects.shape)
+                    losses_min *= losses.shape[0]/5
+                    
+                    if loss_type == 'rotation': 
+                        metrics.add_dict({ 
+                            'minus_loss': -.25*np.sum(losses_min)*args.loss_weights[loss_type],
+                            'plus_loss': np.sum(losses_min)*args.loss_weights[loss_type],
+                            'correct': np.sum(corrects_max)*args.loss_weights[loss_type],
+                            'cnt': len(corrects_max)})
+                        del corrects, corrects_max
+                    else: 
+                        metrics.add_dict({ 
+                            'minus_loss': -1*np.sum(losses_min)*args.loss_weights[loss_type],
+                            'plus_loss': np.sum(losses_min)*args.loss_weights[loss_type],
+                            'correct': np.sum(corrects_max)*args.loss_weights[loss_type],
+                            'cnt': len(corrects_max)})
+                        del corrects, corrects_max
+
+#                     print(metrics['minus_loss']/metrics['cnt'])
+        except StopIteration: 
+            pass
     
-    except StopIteration: 
-        pass
-
     del model
     metrics = metrics/'cnt'
-    # reporter(minus_loss=metrics['minus_loss'], top_1_valid=metrics['correct'], done=True)
     tune.track.log(top_1_valid=metrics['correct'], minus_loss=metrics['minus_loss'], plus_loss=metrics['plus_loss'])
     print(metrics['correct'])
-    return metrics['correct']
+    return metrics['minus_loss']
 
 ops = augment_list(False) # Get the default augmentation set. 
 # Define the space of our augmentations. 
@@ -449,14 +457,17 @@ for i in range(args.num_policy):
 
 final_policy_set = []
 
-if not args.loss == 'icl': 
-    reward_attr = 'minus_loss'
-else: 
-    reward_attr = 'top_1_valid'
+# if not args.loss == 'icl': 
+#     reward_attr = 'minus_loss'
+# else: 
+#     reward_attr = 'minus_loss'
     
+reward_attr = 'top_1_valid'
     
 # TODO: let this be whatever we want. 
 object_store_memory = int(0.6 * ray.utils.get_system_memory() // 10 ** 9 * 10 ** 9)
+
+# TODO Change back
 ray.init(num_gpus=4, ignore_reinit_error=True, 
     num_cpus=28
     )
@@ -469,7 +480,7 @@ num_result_per_cv = 10
 
 for _ in range(2): 
     for cv_fold in range(cv_num): 
-        name = "slm_moco_min_rotloss_search_%s_fold_%d" %(args.dataid, cv_fold)
+        name = "slm_moco_min_debug_ICL_rot_search_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
             max_concurrent=4,
             metric=reward_attr,

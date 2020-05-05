@@ -147,6 +147,7 @@ parser.add_argument('--nomoco', action='store_true', help='set true to **not** h
 parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
 parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
 parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
+parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
 
 
 
@@ -358,7 +359,16 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ] 
-           
+
+    elif args.rand_resize_only:
+        print("Using random resize only")
+        augmentation = [
+            random_resized_crop, 
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ] 
+
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -426,7 +436,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
-        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
+        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1 or epoch == 749) \
            and (not args.multiprocessing_distributed or
                 (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)):
             cp_filename = "{}_{:04d}.tar".format(CHECKPOINT_ID, epoch)
