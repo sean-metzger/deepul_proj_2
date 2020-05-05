@@ -189,28 +189,16 @@ def main_worker(gpu, ngpus_per_node, args):
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
         n_output_classes = 10
         if args.task == "rotation":
             print("Using 4 output classes for rotation")
             n_output_classes = 4
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
-<<<<<<< HEAD
-=======
-        model.fc = torch.nn.Linear(model.fc.in_features, 10) # note this is for cifar 10.
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
-=======
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
 
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
         if name not in ['fc.weight', 'fc.bias']:
             param.requires_grad = False
-
-
 
     # Initialize the weights and biases in the way they did in the paper.
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
@@ -452,20 +440,10 @@ def main_worker(gpu, ngpus_per_node, args):
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
         if is_main_node:
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
             val_str = "val-{}"
             if args.mlp:
                 val_str = "val-mlp-{}"
             wandb.log({val_str.format(args.task): acc1})
-<<<<<<< HEAD
-=======
-            wandb.log({"val-{}".format(args.task): acc1})
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
-=======
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
 
         # remember best acc@1 and save checkpoint
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
@@ -487,15 +465,9 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
     batch_time = AverageMeter('LinCls Time', ':6.3f')
     data_time = AverageMeter('LinCls Data', ':6.3f')
-<<<<<<< HEAD
-<<<<<<< HEAD
+
     rot_losses = AverageMeter('Rot Train Loss', ':.4e')
-=======
     rot_losses = AverageMeter('Rot Val Loss', ':.4e')
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
-=======
-    rot_losses = AverageMeter('Rot Train Loss', ':.4e')
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
     losses = AverageMeter('LinCls Loss', ':.4e')
     top1 = AverageMeter('LinCls Acc@1', ':6.2f')
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
@@ -525,17 +497,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             rotated_images, target = rotate_images(images)
             output = model(rotated_images)
             loss = criterion(output, target)
-<<<<<<< HEAD
-<<<<<<< HEAD
             rot_losses.update(loss.item(), images.size(0))
             acc1, acc5 = accuracy(output, target, topk=(1,4))
-=======
-            rot_losses.update(loss.item(), images.size(0))            
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
-=======
-            rot_losses.update(loss.item(), images.size(0))
-            acc1, acc5 = accuracy(output, target, topk=(1,4))
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
         else:
             target = target.cuda(args.gpu, non_blocking=True)
 
@@ -543,21 +506,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             output = model(images)
             loss = criterion(output, target)
             losses.update(loss.item(), images.size(0))
-<<<<<<< HEAD
-<<<<<<< HEAD
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
         # measure accuracy and record loss
         
-=======
-            
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
->>>>>>> c29b7a7711ad41d7511267d59f56680ad9b5f6e2
-=======
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        # measure accuracy and record loss
-        
->>>>>>> 781b41ba9874989d31b612757c5313ac687127c7
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
