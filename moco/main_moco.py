@@ -53,6 +53,8 @@ parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb pro
 parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
+parser.add_argument('--image-log-interval', default=10, type=int,
+                    help='how often to log example images')
 
 
 ################
@@ -473,6 +475,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
+        if i == 0 and epoch % args.image_log_interval == 0 and args.multiprocessing_distributed and args.gpu == 0:
+            eximg0 = wandb.Image(images[0][0].permute(1,2,0).cpu().numpy())
+            eximg1 = wandb.Image(images[1][0].permute(1,2,0).cpu().numpy())
+            wandb.log({"example comparison image": [eximg0, eximg1]})
         
         # compute output
         if args.rotnet:
