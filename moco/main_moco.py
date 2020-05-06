@@ -305,6 +305,7 @@ def main_worker(gpu, ngpus_per_node, args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             args.id=checkpoint['id']
             args.name=checkpoint['name']
+            CHECKPOINT_ID = checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -444,6 +445,22 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
+
+        # save current epoch
+        if not args.multiprocessing_distributed or args.gpu == 0:
+            print("saving latest epoch")
+            cp_filename = "{}_latest.tar".format(CHECKPOINT_ID[:5])
+            cp_fullpath = os.path.join(args.checkpoint_fp, cp_filename)
+            torch.save({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+                'id': args.id,
+                'name': CHECKPOINT_ID,
+            }, cp_fullpath)
+            print("saved latest epoch")
+
 
         if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
            and (not args.multiprocessing_distributed or
