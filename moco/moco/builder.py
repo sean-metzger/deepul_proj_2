@@ -159,7 +159,7 @@ class MoCo(nn.Module):
             raise NotImplementedError("The following head has not been implemented: {}".forward(head))
         
     
-    def moco_forward(self, im_q, im_k):
+    def moco_forward(self, im_q, im_k, evaluate=False):
         """
         Input:
             im_q: a batch of query images
@@ -178,14 +178,17 @@ class MoCo(nn.Module):
         with torch.no_grad():  # no gradient to keys
             self._momentum_update_key_encoder()  # update the key encoder
 
+            if not evaluate: 
             # shuffle for making use of BN
-            im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+                im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
             k = self.encoder_k(im_k)  # keys: NxC
             k = nn.functional.normalize(k, dim=1)
 
+
+            if not evaluate: 
             # undo shuffle
-            k = self._batch_unshuffle_ddp(k, idx_unshuffle)
+                k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
         # compute logits
         # Einstein sum is more intuitive
@@ -203,8 +206,9 @@ class MoCo(nn.Module):
         # labels: positive key indicators
         labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
 
+        if not evaluate: 
         # dequeue and enqueue
-        self._dequeue_and_enqueue(k)
+            self._dequeue_and_enqueue(k)
 
         return logits, labels
 
