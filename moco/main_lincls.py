@@ -111,6 +111,8 @@ parser.add_argument('--mlp', action='store_true',
                     help='train a 2 layer mlp instead of a linear layer')
 parser.add_argument('--task', default='classify',
                     help='which task to train', choices=("classify", "rotation"))
+parser.add_argument('--loss-prefix', default="", type=str, 
+                    help = "a prefix to add to the losses")
 
 parser.add_argument('--kfold', default=None, type=int, 
                     help = "which fold we're looking at")
@@ -446,6 +448,8 @@ def main_worker(gpu, ngpus_per_node, args):
             val_str = "val-{}"
             if args.mlp:
                 val_str = "val-mlp-{}"
+            if args.loss_prefix:
+                val_str = args.loss_prefix + "-" + val_str
             wandb.log({val_str.format(args.task): acc1})
 
         # remember best acc@1 and save checkpoint
@@ -464,12 +468,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb.save(savefile)
 
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
-    batch_time = AverageMeter('LinCls Time', ':6.3f')
-    data_time = AverageMeter('LinCls Data', ':6.3f')
-    rot_losses = AverageMeter('Rot Train Loss', ':.4e')
-    losses = AverageMeter('LinCls Loss', ':.4e')
-    top1 = AverageMeter('LinCls Acc@1', ':6.2f')
-    top5 = AverageMeter('LinCls Acc@5', ':6.2f')
+    batch_time = AverageMeter(args.loss_prefix + 'LinCls Time', ':6.3f')
+    data_time = AverageMeter(args.loss_prefix + 'LinCls Data', ':6.3f')
+    rot_losses = AverageMeter(args.loss_prefix + 'Rot Train Loss', ':.4e')
+    losses = AverageMeter(args.loss_prefix + 'LinCls Loss', ':.4e')
+    top1 = AverageMeter(args.loss_prefix + 'LinCls Acc@1', ':6.2f')
+    top5 = AverageMeter(args.loss_prefix + 'LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(train_loader),
