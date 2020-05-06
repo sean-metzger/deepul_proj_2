@@ -151,7 +151,9 @@ parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (ma
 parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
 parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugment orginal transforms')
 
-
+parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
+parser.add_argument('--custom_aug_name', default=None, type=str, 
+    help='name of custom augmentation')
 
 ngpus_per_node = torch.cuda.device_count()
 
@@ -211,6 +213,8 @@ def main_worker(gpu, ngpus_per_node, args):
         CHECKPOINT_ID += "_randaug"
     if not(args.kfold == None): 
         CHECKPOINT_ID += "_fold_%d" %(args.kfold)
+    if not(args.custom_aug_name == None): 
+        CHECKPOINT_ID += "_custom_aug_" + args.custom_aug_name
 
     args.gpu = gpu
 
@@ -363,6 +367,15 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]    
+
+    elif args.rand_resize_only:
+        print("Using random resize only")
+        augmentation = [
+            random_resized_crop, 
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ] 
         
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
@@ -378,6 +391,9 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.faa_aug:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
+    elif not args.custom_aug_name == None: 
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
+        transformations = moco.loader.TwoCropsTransform(augmentation)
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
