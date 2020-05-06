@@ -22,8 +22,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import torchvision.models as tv_models
-
+import torchvision.models as models
 
 from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
@@ -31,9 +30,9 @@ import slm_utils.get_faa_transforms
 import moco.loader
 import moco.builder
 
-model_names = sorted(name for name in tv_models.__dict__
+model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
-    and callable(tv_models.__dict__[name]))
+    and callable(models.__dict__[name]))
 
 
 # ONLINE LOGGING
@@ -123,25 +122,18 @@ parser.add_argument('--moco-m', default=0.999, type=float,
 parser.add_argument('--moco-t', default=0.07, type=float,
                     help='softmax temperature (default: 0.07)')
 
-parser.add_argument('--kfold', default=None, type=int, 
-    help="which fold to use")
-parser.add_argument('--custom_aug_name', default=None, type=str, 
-    help='name of custom augmentation')
-
 
 parser.add_argument('--kfold', default=None, type=int, 
     help="which fold to use")
+
+
 # options for moco v2
 parser.add_argument('--mlp', action='store_true',
                     help='use mlp head')
-parser.add_argument('--rotnet_mlp', action='store_true',
-                    help='use mlp head for rotnet')
 parser.add_argument('--aug-plus', action='store_true',
                     help='use moco v2 data augmentation')
 parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
-
-
 # Fast AutoAugment Args.
 parser.add_argument('--faa_aug', action='store_true',
                     help='use FastAutoAugment CIFAR10 augmentations')
@@ -150,17 +142,13 @@ parser.add_argument('--randomcrop', action='store_true',
 parser.add_argument('--gauss', action='store_true', 
                     help='blur with FAA augs')
 
+parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
+parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
 
 # RandAug
 parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
 parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
 parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
-
-parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
-
-parser.add_argument('--rotnet', action='store_true', help='set true to add a rot net head')
-parser.add_argument('--nomoco', action='store_true', help='set true to **not** have the moco head (moco head by default)')
-
 parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugment orginal transforms')
 
 
@@ -189,7 +177,6 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
-    print("NGPUs per node: {}".format(ngpus_per_node))
 
     # set the checkpoint id
     if args.multiprocessing_distributed:
@@ -219,26 +206,17 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.randomcrop:
         CHECKPOINT_ID += "_randcrop"
     if args.rotnet:
-
         CHECKPOINT_ID += "_rotnet"
-
-        if args.rotnet_mlp:
-            CHECKPOINT_ID += "_rotnetmlp"
-        else:
-            CHECKPOINT_ID += "_rotnet"
-
     if args.rand_aug:
         CHECKPOINT_ID += "_randaug"
     if not(args.kfold == None): 
         CHECKPOINT_ID += "_fold_%d" %(args.kfold)
-    if not(args.custom_aug_name == None): 
-        CHECKPOINT_ID += "_custom_aug_" + args.custom_aug_name
 
     args.gpu = gpu
 
     # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0:
-        def print_pass(*args): 
+        def print_pass(*args):
             pass
         builtins.print = print_pass
 
@@ -254,98 +232,59 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+    # create model
+    heads = {}
+    if not args.nomoco:
+        heads["moco"] = {
+            "num_classes": args.moco_dim
+        }
+    if args.rotnet:
+        heads["rotnet"] = {
+            "num_classes": 4
+        }
+    model = moco.builder.MoCo(
+        models.__dict__[args.arch],
+        K=args.moco_k, m=args.moco_m, T=args.moco_t, mlp=args.mlp, dataid=args.dataid,
+        multitask_heads=heads
+    )
+    print(model)
 
+
+    if args.distributed:
+        # For multiprocessing distributed, DistributedDataParallel constructor
+        # should always set the single device scope, otherwise,
+        # DistributedDataParallel will use all available devices.
         if args.gpu is not None:
+            torch.cuda.set_device(args.gpu)
+            model.cuda(args.gpu)
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
-            torch.cuda.set_device(args.gpu)
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-
-
-    def distributed_model(mdl):
-        if args.distributed:
-            # For multiprocessing distributed, DistributedDataParallel constructor
-            # should always set the single device scope, otherwise,
-            # DistributedDataParallel will use all available devices.
-            if args.gpu is not None:
-                mdl.cuda(args.gpu)
-                return torch.nn.parallel.DistributedDataParallel(mdl, device_ids=[args.gpu])
-            else:
-                mdl.cuda()
-                # DistributedDataParallel will divide and allocate batch_size to all
-                # available GPUs if device_ids are not set
-                return torch.nn.parallel.DistributedDataParallel(mdl)
-        elif args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-            return mdl.cuda(args.gpu)
-            # comment out the following line for debugging
-            # raise NotImplementedError("Only DistributedDataParallel is supported.")
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else:
-            # AllGather implementation (batch shuffle, queue update, etc.) in
-            # this code only supports DistributedDataParallel.
-            raise NotImplementedError("Only DistributedDataParallel is supported.")
-
-
-    models = {}
-    optimizers = {}
-    ###########
-    # ENCODER #
-    ###########
-    # create models in a distributeddataparallel way
-    encoder = tv_models.__dict__[args.arch](num_classes=100) # num_classes doesn't matter since we remove this layer
-    encoder_k = tv_models.__dict__[args.arch](num_classes=args.moco_dim)
-    dim_mlp = encoder.fc.weight.shape[1]
-    if args.dataid =="cifar10": 
-        # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
-        encoder.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
-        encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
-        # Get rid of maxpool, as in SIMCLR cifar10 experiments. 
-        encoder.maxpool = nn.Identity()
-        encoder_k.maxpool = nn.Identity()
-    # hack to "remove" the fc layer
-    encoder.fc = nn.Identity()
-    encoder = distributed_model(encoder)
-    print("ENCODER")
-    print(encoder)
-    models["encoder"] = encoder
-    
-    ##########
-    # ROTNET #
-    ##########
-    if args.rotnet:
-        rotnet_head = nn.Linear(dim_mlp, 4)
-        if args.rotnet_mlp:
-            rotnet_head = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), rotnet_head)
-        rotnet_head = distributed_model(rotnet_head)
-        print("ROTNET")
-        print(rotnet_head)
-        optimizers["rotnet"] = torch.optim.SGD(list(encoder.parameters()) + list(rotnet_head.parameters()), args.lr,
-                                               momentum=args.momentum,
-                                               weight_decay=args.weight_decay)
-        models["rotnet"] = rotnet_head
-
-    ########
-    # MOCO #
-    ########
-    if not args.nomoco:
-        moco_head = moco.builder.MoCo(encoder, encoder_k, dim_mlp, args.moco_dim, mlp=args.mlp)
-        moco_head = distributed_model(moco_head)
-        print("MOCO")
-        print(moco_head)
-        optimizers["moco"] = torch.optim.SGD(list(encoder.parameters()) + list(moco_head.parameters()), args.lr,
-                                             momentum=args.momentum,
-                                             weight_decay=args.weight_decay,
-        )
-        models["moco"] = moco_head
-        
-
+            model.cuda()
+            # DistributedDataParallel will divide and allocate batch_size to all
+            # available GPUs if device_ids are not set
+            model = torch.nn.parallel.DistributedDataParallel(model)
+    elif args.gpu is not None:
+        torch.cuda.set_device(args.gpu)
+        model = model.cuda(args.gpu)
+        # comment out the following line for debugging
+        # raise NotImplementedError("Only DistributedDataParallel is supported.")
+    else:
+        # AllGather implementation (batch shuffle, queue update, etc.) in
+        # this code only supports DistributedDataParallel.
+        raise NotImplementedError("Only DistributedDataParallel is supported.")
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-    print("ARGS: {}".format(args))
+    # TODO(pr) should each head have its own optimizer
+    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -358,10 +297,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 loc = 'cuda:{}'.format(args.gpu)
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
-            for model_key, model_val in checkpoint['models']:
-                model.load_state_dict(model_val)
-            for opt_key, opt_val in checkpoint['optimizers']:
-                optimizers[opt_key].load_state_dict(opt_val)
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
             args.id=checkpoint['id']
             args.name=checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -392,7 +329,6 @@ def main_worker(gpu, ngpus_per_node, args):
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
     if args.aug_plus:
-        print("Using aug plus")
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
             random_resized_crop,
@@ -406,15 +342,9 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
-    elif args.faa_aug:
-        print("Using faa aug")
+    elif args.faa_aug: 
         augmentation, _ = slm_utils.get_faa_transforms.get_faa_transforms_cifar_10(args.randomcrop, args.gauss)
         transformations = moco.loader.TwoCropsTransform(augmentation)
-
-    elif not args.custom_aug_name == None: 
-        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
-        transformations = moco.loader.TwoCropsTransform(augmentation)
-
     elif args.rand_aug_orig:
         print("Using random aug original")
         augmentation = [
@@ -424,7 +354,6 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]    
-
     elif args.rand_aug:
         print("Using random aug")
         augmentation = [
@@ -433,19 +362,9 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize
-        ] 
-
-    elif args.rand_resize_only:
-        print("Using random resize only")
-        augmentation = [
-            random_resized_crop, 
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ] 
-
+        ]    
+        
     else:
-        print("Using mocov1 aug")
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
             random_resized_crop,
@@ -456,9 +375,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-
-    print('using augmentation:', augmentation)
-    if not args.faa_aug and args.custom_aug_name == None:
+    if not args.faa_aug:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
 
@@ -493,31 +410,26 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         train_sampler = None
 
-
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
-    print("Train loader number of batches per epoch: {}; batch size: {}".format(len(train_loader), args.batch_size))
-
-
-    print(len(train_loader))
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.gpu == 0:
         wandb.init(project=args.wandbproj,
                name=CHECKPOINT_ID, id=args.id, resume=args.resume,
                config=args.__dict__, notes=args.notes)
+        print(model)
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        for _,optimizer in optimizers.items():
-            adjust_learning_rate(optimizer, epoch, args)
+        adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, models, criterion, optimizers, epoch, args, CHECKPOINT_ID)
+        train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
-        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1 or epoch == 749) \
+        if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
            and (not args.multiprocessing_distributed or
                 (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0)):
             cp_filename = "{}_{:04d}.tar".format(CHECKPOINT_ID, epoch)
@@ -525,8 +437,8 @@ def main_worker(gpu, ngpus_per_node, args):
             torch.save({
                 'epoch': epoch + 1,
                 'arch': args.arch,
-                'state_dict': {k: v.state_dict() for k,v in models.items()},
-                'optimizers' : {k: v.state_dict() for k,v in optimizers.items()},
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
                 'id': args.id,
                 'name': CHECKPOINT_ID,
             }, cp_fullpath)
@@ -636,6 +548,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         if i % args.print_freq == 0:
             progress.display(i)
+
 
 
 class AverageMeter(object):

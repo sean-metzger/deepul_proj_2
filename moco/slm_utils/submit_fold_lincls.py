@@ -22,7 +22,7 @@ def find_model(name, fold, epochs, basepath="/userdata/smetzger/all_deepul_files
     print("COULDNT FIND MODEL")
     assert True==False # just throw and error. 
 
-base_name = 'resnet50_750epochs_512bsz_0.4000lr_0.9000mtm_120-160sched_128.0000mocod_65536mocok_0.9990mocom_0.2000mocot_1.000e-04wd_mlp_augplus_cos'
+base_name = '750epochs_512bsz_0.4000lr_mlp_cos_rrc_fold'
 checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 epochs = 750
 
@@ -39,7 +39,7 @@ for fold in range (5):
     string += ' --checkpoint_fp ' + str(checkpoint_fp)
     string += ' --rank 0'
     string += ' --pretrained ' + str(find_model(base_name, fold, 750))
-    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_lincls_on_rotnet kfolds'"
+    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_lincls_on_just RRC'"
     string += " --kfold %d" %fold
     string += " --task classify"
 

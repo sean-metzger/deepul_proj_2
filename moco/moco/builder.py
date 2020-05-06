@@ -9,7 +9,7 @@ class MoCo(nn.Module):
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, encoder, encoder_k, dim_mlp, mocodim, K=65536, m=0.999, T=0.07, mlp=False, dataid="cifar10", multitask_heads={}):
+    def __init__(self, base_encoder, K=65536, m=0.999, T=0.07, mlp=False, dataid="cifar10", multitask_heads={}):
         """
         K: queue size; number of negative keys (default: 65536)
         m: moco momentum of updating key encoder (default: 0.999)
@@ -21,32 +21,70 @@ class MoCo(nn.Module):
         self.m = m
         self.T = T
 
-        self.moco_head = nn.Linear(dim_mlp, mocodim)
-        if mlp:
-            self.moco_head = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.moco_head)
-            encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), encoder_k.fc)
         
-        self.encoder_k = encoder_k
-        # set the params to be the same starting values
-        for param_q, param_k in zip(self._get_moco_params(encoder), self.encoder_k.parameters()):
-            param_k.data.copy_(param_q.data)
-            param_k.requires_grad = False  # not update by gradient, update by momentum technique
+        # create the encoders
+        # num_classes does not matter here
+        encoder = base_encoder(num_classes=128)
 
-        # create the moco queue
-        self.register_buffer("queue", torch.randn(mocodim, K))
-        self.queue = nn.functional.normalize(self.queue, dim=0)
-        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+        if dataid =="cifar10": 
+            # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
+            encoder.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
+            # Get rid of maxpool, as in SIMCLR cifar10 experiments. 
+            encoder.maxpool = nn.Identity()
+
+        # what dimension should we make the heads?
+        dim_mlp = encoder.fc.weight.shape[1]
+
+        # hack to "remove" the fc layer
+        encoder.fc = nn.Identity()
+        modules = {
+            # pop off the final fc layer and store the shared encoder
+            "encoder": encoder,
+        }
+
+        # Multitask is easy: we just need lots of [mlp/linear] heads
+        for mt in multitask_heads.keys():
+            fc = nn.Linear(dim_mlp, multitask_heads[mt]["num_classes"])
+            if mlp:
+                fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), fc)
+            modules[mt] = fc
+            
+        self.model = nn.ModuleDict(modules)
+
+        # Treat moco special, since it needs the key model
+        if "moco" in multitask_heads:
+            mocodim=multitask_heads["moco"]["num_classes"]
+            self.encoder_k = base_encoder(num_classes=mocodim)
+
+            # now apply the same encoder updates
+            if mlp:
+                self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_k.fc)
+                
+            if dataid=="cifar10":
+                self.encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
+                self.encoder_k.maxpool = nn.Identity()
+                
+            # set the params to be the same starting values
+            
+            for param_q, param_k in zip(self._get_moco_params(), self.encoder_k.parameters()):
+                param_k.data.copy_(param_q.data)  
+                param_k.requires_grad = False  # not update by gradient, update by momentum technique
+
+            # create the moco queue
+            self.register_buffer("queue", torch.randn(mocodim, K))
+            self.queue = nn.functional.normalize(self.queue, dim=0)
+            self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
 
 
-    def _get_moco_params(self, encoder):
-        return chain(encoder.parameters(), self.moco_head.parameters())
+    def _get_moco_params(self):
+        return chain(self.model["encoder"].parameters(), self.model["moco"].parameters())
 
     @torch.no_grad()
-    def _momentum_update_key_encoder(self, encoder):
+    def _momentum_update_key_encoder(self):
         """
         Momentum update of the key encoder
         """
-        for param_q, param_k in zip(self._get_moco_params(encoder), self.encoder_k.parameters()):
+        for param_q, param_k in zip(self._get_moco_params(), self.encoder_k.parameters()):
             param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
 
     @torch.no_grad()
@@ -112,9 +150,9 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, head, im_q, im_k=None, evaluate=False):
+    def forward(self, head, im_q, im_k=None):
         if head=="moco":
-            return self.moco_forward(im_q, im_k, evaluate)
+            return self.moco_forward(im_q, im_k)
         elif head=="rotnet":
             return self.model[head](self.model["encoder"](im_q))
         else:
@@ -132,25 +170,24 @@ class MoCo(nn.Module):
         
         # compute query features
 
-        q = encoder(im_q)
-        q = self.moco_head(q)  # queries: NxC
+        q = self.model["encoder"](im_q)
+        q = self.model["moco"](q)  # queries: NxC
         q = nn.functional.normalize(q, dim=1)
 
         # compute key features
         with torch.no_grad():  # no gradient to keys
+            self._momentum_update_key_encoder()  # update the key encoder
 
             if not evaluate: 
-                self._momentum_update_key_encoder(encoder)  # update the key encoder
-
             # shuffle for making use of BN
-            if not evaluate: 
                 im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
             k = self.encoder_k(im_k)  # keys: NxC
             k = nn.functional.normalize(k, dim=1)
 
-            # undo shuffle
+
             if not evaluate: 
+            # undo shuffle
                 k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
         # compute logits
@@ -169,8 +206,8 @@ class MoCo(nn.Module):
         # labels: positive key indicators
         labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
 
+        if not evaluate: 
         # dequeue and enqueue
-        if not evaluate:
             self._dequeue_and_enqueue(k)
 
         return logits, labels

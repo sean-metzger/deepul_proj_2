@@ -12,7 +12,6 @@ def find_model(name, fold, epochs, basepath="/userdata/smetzger/all_deepul_files
     name = model name
     fold = which fold of the data to find. 
     epochs = how many epochs to load the checkpoint at (e.g. 750)
-    
     """
     for file in os.listdir(basepath):
         if name in str(file) and 'fold_%d' %fold in str(file):

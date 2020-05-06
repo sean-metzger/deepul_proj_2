@@ -200,6 +200,8 @@ def main_worker(gpu, ngpus_per_node, args):
         if name not in ['fc.weight', 'fc.bias']:
             param.requires_grad = False
 
+
+
     # Initialize the weights and biases in the way they did in the paper.
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
@@ -247,6 +249,7 @@ def main_worker(gpu, ngpus_per_node, args):
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
             
+
             if args.mlp:
                 assert set(msg.missing_keys) == {"fc.0.weight", "fc.0.bias", "fc.1.weight", "fc.1.bias"}
             else:
@@ -450,8 +453,6 @@ def main_worker(gpu, ngpus_per_node, args):
             is_best = acc1 > best_acc1
             best_acc1 = max(acc1, best_acc1)
             if is_best:
-                if args.task == "rotation": 
-                    savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best_rotation.tar".format(args.id[:5]))
                 savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best.tar".format(args.id[:5]))
                 torch.save({
                     'epoch': epoch + 1,
@@ -465,9 +466,7 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
     batch_time = AverageMeter('LinCls Time', ':6.3f')
     data_time = AverageMeter('LinCls Data', ':6.3f')
-
     rot_losses = AverageMeter('Rot Train Loss', ':.4e')
-    rot_losses = AverageMeter('Rot Val Loss', ':.4e')
     losses = AverageMeter('LinCls Loss', ':.4e')
     top1 = AverageMeter('LinCls Acc@1', ':6.2f')
     top5 = AverageMeter('LinCls Acc@5', ':6.2f')
@@ -551,10 +550,8 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 rotated_images, target = rotate_images(images)
                 output = model(rotated_images)
                 loss = criterion(output, target)
-
                 rot_losses.update(loss.item(), images.size(0))
                 acc1, acc5 = accuracy(output, target, topk=(1,4))
-
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
@@ -563,8 +560,8 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 acc1, acc5 = accuracy(output, target, topk=(1, 5))
             # measure accuracy and record loss
             
-            top1.update(acc1[0], output.size(0))
-            top5.update(acc5[0], output.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)

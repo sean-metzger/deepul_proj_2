@@ -34,11 +34,19 @@ import ray.tune as tune
 
 # FOR DEBUG
 class Args:
-    checkpoints = ['fxrZE', 'lJu2W', 'rdEIg', 'esdq2' ,'vnhKs'] # Ordered KFOLDS order. Make this nicer.
+
+
+    base = 'moco_rrc'  # Moco or moco_rrc
+
+    if base == 'moco': 
+        checkpoints = ['fxrZE', 'lJu2W', 'rdEIg', 'esdq2' ,'vnhKs'] # Ordered KFOLDS order. Make this nicer.
+    
+    else: 
+        checkpoints = ['6bV5F', 'Pr3wZ', '43Hdo','h18r9', 'TcXI9']
     checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
     data = '/userdata/smetzger/data/cifar_10/'
     
-    # Some args for the Fast Autoaugment thing. 
+    # Some args for FAA. 
     num_op = 2
     num_policy=5
     num_search = 200
@@ -48,8 +56,8 @@ class Args:
     resume=False
     arch = 'resnet50'
     distributed=False
-    loss = 'icl_and_rotation'# one of rotation, supervised, icl, icl_and_rotation.
-    base = 'moco' # Name for what we are saving our training runs as.
+    loss = 'rotation'# one of rotation, supervised, icl, icl_and_rotation.
+    base = 'moco_rrc' # Name for what we are saving our training runs as.
 
     # Moco args. 
     moco_k = 65536
@@ -326,6 +334,7 @@ def eval_augmentations(config):
         augmentations = policy_decoder(augment, augment['num_policy'], augment['num_op'])
         
         fold = augment['cv_fold']
+        print(cv_fold)
 
         # Load the model, either the rotnet/lincls head, or the full MoCo model.
         model = load_model(fold, loss_type).cuda()
@@ -386,6 +395,7 @@ def eval_augmentations(config):
 
 
                     losses = np.concatenate(losses)
+                    print(losses.shape)
 #                     print('losses shape' , losses.shape) This would usually just be 5*512, 
                     losses_min = np.mean(losses) # get it so it averages out intead of taking the smallest losses. 
                     corrects = np.concatenate(corrects)
@@ -432,10 +442,10 @@ final_policy_set = []
     
 reward_attr = 'minus_loss' 
 
-# Initialize ray cluster. 
+# TODO boost this. 
 ray.init(num_gpus=4, ignore_reinit_error=True, 
     num_cpus=28
-    )
+)
 
 
 import ray
@@ -448,7 +458,7 @@ for _ in range(2):  # 2 experiments from FAA.
     for cv_fold in range(cv_num): # For the 5 folds. 
         name = "slm_moco_min_max_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
-            max_concurrent=4,
+            max_concurrent=8,
             metric=reward_attr,
             mode='max')
 
@@ -457,7 +467,7 @@ for _ in range(2):  # 2 experiments from FAA.
             name=name,
             num_samples=200,
             resources_per_trial={
-                "gpu": 1
+                "gpu":1
             },
             search_alg=hyperopt_search,
             verbose=2,
