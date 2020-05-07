@@ -55,7 +55,7 @@ parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
                     help='how often to log example images')
-
+parser.add_argument('--upload_checkpoints', action='store_true', help='Upload checkpoints to wandb')
 
 ################
 # ORIGNAL ARGS #
@@ -333,6 +333,10 @@ def main_worker(gpu, ngpus_per_node, args):
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
+    if args.aug_plus and (args.faa_aug or 
+                          args.rand_aug or args.rand_aug_orig):
+        raise Exception("Cannot have multiple augs on command line")
+       
     if args.aug_plus:
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
@@ -353,9 +357,9 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.rand_aug_orig:
         print("Using random aug original")
         augmentation = [
-            RandAugment(args.rand_aug_n, args.rand_aug_m),
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
             transforms.ToTensor(),
             normalize
         ]    
@@ -363,8 +367,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print("Using random aug")
         augmentation = [
             random_resized_crop,
-            RandAugment(args.rand_aug_n, args.rand_aug_m),
             transforms.RandomHorizontalFlip(),
+            RandAugment(args.rand_aug_n, args.rand_aug_m),
             transforms.ToTensor(),
             normalize
         ]    
@@ -432,7 +436,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
     # CR: only the master will report to wandb for now
-    if not args.multiprocessing_distributed or args.gpu == 0:
+    if not args.multiprocessing_distributed or args.rank % ngpus_per_node == 0:
         wandb.init(project=args.wandbproj,
                name=CHECKPOINT_ID, id=args.id, resume=args.resume,
                config=args.__dict__, notes=args.notes)
@@ -447,7 +451,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         # save current epoch
-        if not args.multiprocessing_distributed or args.gpu == 0:
+        if not args.multiprocessing_distributed or args.rank % ngpus_per_node == 0:
             print("saving latest epoch")
             cp_filename = "{}_latest.tar".format(CHECKPOINT_ID[:5])
             cp_fullpath = os.path.join(args.checkpoint_fp, cp_filename)
@@ -475,6 +479,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 'id': args.id,
                 'name': CHECKPOINT_ID,
             }, cp_fullpath)
+            if args.upload_checkpoints:
+                print("Uploading wandb checkpoint")
+                wandb.save(cp_fullpath)
             if epoch == args.epochs - 1:
                 print("Saving final results to wandb")
                 wandb.save(cp_fullpath)
@@ -491,7 +498,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
-        args.multiprocessing_distributed and args.gpu == 0,
+        args.multiprocessing_distributed and args.rank % ngpus_per_node == 0,
         len(train_loader),
         [batch_time, data_time, losses, rot_losses, top1, top5],
         prefix="{} Epoch: [{}]".format(CHECKPOINT_ID[:5],epoch))
@@ -508,7 +515,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
-        if i == 0 and epoch % args.image_log_interval == 0 and args.multiprocessing_distributed and args.gpu == 0:
+        if i == 0 and epoch % args.image_log_interval == 0 and args.multiprocessing_distributed and args.rank % ngpus_per_node == 0:
             eximg0 = wandb.Image(images[0][0].permute(1,2,0).cpu().numpy())
             eximg1 = wandb.Image(images[1][0].permute(1,2,0).cpu().numpy())
             wandb.log({"example comparison image": [eximg0, eximg1]})

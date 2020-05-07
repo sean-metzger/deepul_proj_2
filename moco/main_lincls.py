@@ -192,9 +192,10 @@ def main_worker(gpu, ngpus_per_node, args):
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
         n_output_classes = 10
-        if args.task == "rotation":
-            print("Using 4 output classes for rotation")
-            n_output_classes = 4
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+    if args.task == "rotation":
+        print("Using 4 output classes for rotation")
+        n_output_classes = 4
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
     # freeze all layers but the last fc
