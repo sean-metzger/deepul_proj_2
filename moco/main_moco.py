@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from RandAugment import RandAugment
+# from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -368,7 +368,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]    
 
-    elif args.rand_resize_only:
+    elif args.rand_resize_only and args.custom_aug_name == None:
         print("Using random resize only")
         augmentation = [
             random_resized_crop, 
@@ -377,6 +377,12 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ] 
         
+
+
+    elif not args.custom_aug_name == None: 
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name, ontopof_mocov2=not(args.rand_resize_only))
+        transformations = moco.loader.TwoCropsTransform(augmentation)
+
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -388,12 +394,13 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    if not args.faa_aug:
+
+
+    if not args.faa_aug and args.custom_aug_name == None:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
-    elif not args.custom_aug_name == None: 
-        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
-        transformations = moco.loader.TwoCropsTransform(augmentation)
+
+    print('xforms', transformations)
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
