@@ -358,13 +358,23 @@ def main_worker(gpu, ngpus_per_node, args):
         crop_transform = transforms.RandomCrop(32, padding=4)
         crop_size=32
 
-    train_dataset = torchvision.datasets.CIFAR10(args.data,
-        transform= transforms.Compose([
-            crop_transform,
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=False)
+    if args.dataid == "cifar10":
+        train_dataset = torchvision.datasets.CIFAR10(args.data,
+                                                     transform= transforms.Compose([
+                                                         crop_transform,
+                                                         transforms.RandomHorizontalFlip(),
+                                                         transforms.ToTensor(),
+                                                         normalize,
+                                                     ]), download=False)
+    else:
+        train_dataset = datasets.ImageFolder(
+            os.path.join(args.data, "train"),
+            transforms.Compose([
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+        ]))
 
 
     val_transform = transforms.Compose([
@@ -374,10 +384,18 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize,
             ])
 
-    if args.kfold == None: 
-        val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
-            download=True, train=False)
-
+    if args.kfold == None:
+        if args.dataid == "cifar10":
+            val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
+                                                       download=True, train=False)
+        else:
+            valdir = os.path.join(args.data, 'val')
+            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
     else: 
         # use the held out train data as the validation data. 
         val_dataset = torchvision.datasets.CIFAR10(args.data,
