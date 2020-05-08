@@ -111,6 +111,8 @@ parser.add_argument('--mlp', action='store_true',
                     help='train a 2 layer mlp instead of a linear layer')
 parser.add_argument('--task', default='classify',
                     help='which task to train', choices=("classify", "rotation"))
+parser.add_argument('--loss-prefix', default="", type=str, 
+                    help = "a prefix to add to the losses")
 
 parser.add_argument('--kfold', default=None, type=int, 
                     help = "which fold we're looking at")
@@ -190,9 +192,10 @@ def main_worker(gpu, ngpus_per_node, args):
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
         n_output_classes = 10
-        if args.task == "rotation":
-            print("Using 4 output classes for rotation")
-            n_output_classes = 4
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+    if args.task == "rotation":
+        print("Using 4 output classes for rotation")
+        n_output_classes = 4
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
     # freeze all layers but the last fc
@@ -355,13 +358,23 @@ def main_worker(gpu, ngpus_per_node, args):
         crop_transform = transforms.RandomCrop(32, padding=4)
         crop_size=32
 
-    train_dataset = torchvision.datasets.CIFAR10(args.data,
-        transform= transforms.Compose([
-            crop_transform,
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=False)
+    if args.dataid == "cifar10":
+        train_dataset = torchvision.datasets.CIFAR10(args.data,
+                                                     transform= transforms.Compose([
+                                                         crop_transform,
+                                                         transforms.RandomHorizontalFlip(),
+                                                         transforms.ToTensor(),
+                                                         normalize,
+                                                     ]), download=False)
+    else:
+        train_dataset = datasets.ImageFolder(
+            os.path.join(args.data, "train"),
+            transforms.Compose([
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+        ]))
 
 
     val_transform = transforms.Compose([
@@ -371,10 +384,18 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize,
             ])
 
-    if args.kfold == None: 
-        val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
-            download=True, train=False)
-
+    if args.kfold == None:
+        if args.dataid == "cifar10":
+            val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
+                                                       download=True, train=False)
+        else:
+            valdir = os.path.join(args.data, 'val')
+            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
     else: 
         # use the held out train data as the validation data. 
         val_dataset = torchvision.datasets.CIFAR10(args.data,
@@ -446,6 +467,8 @@ def main_worker(gpu, ngpus_per_node, args):
             val_str = "val-{}"
             if args.mlp:
                 val_str = "val-mlp-{}"
+            if args.loss_prefix:
+                val_str = args.loss_prefix + "-" + val_str
             wandb.log({val_str.format(args.task): acc1})
 
         # remember best acc@1 and save checkpoint
@@ -467,12 +490,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb.save(savefile)
 
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
-    batch_time = AverageMeter('LinCls Time', ':6.3f')
-    data_time = AverageMeter('LinCls Data', ':6.3f')
-    rot_losses = AverageMeter('Rot Train Loss', ':.4e')
-    losses = AverageMeter('LinCls Loss', ':.4e')
-    top1 = AverageMeter('LinCls Acc@1', ':6.2f')
-    top5 = AverageMeter('LinCls Acc@5', ':6.2f')
+    batch_time = AverageMeter(args.loss_prefix + 'LinCls Time', ':6.3f')
+    data_time = AverageMeter(args.loss_prefix + 'LinCls Data', ':6.3f')
+    rot_losses = AverageMeter(args.loss_prefix + 'Rot Train Loss', ':.4e')
+    losses = AverageMeter(args.loss_prefix + 'LinCls Loss', ':.4e')
+    top1 = AverageMeter(args.loss_prefix + 'LinCls Acc@1', ':6.2f')
+    top5 = AverageMeter(args.loss_prefix + 'LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(train_loader),
