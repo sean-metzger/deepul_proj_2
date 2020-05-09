@@ -313,13 +313,22 @@ class Augmentation(object):
                 img = apply_augment(img, name, level)
         return img
         
+class SingleAugmentation(object): 
+    def __init__(self, aug_idx): 
+        self.name = augment_list(False)[aug_idx]
+
+
+    def __call__(self, img): 
+        level = np.random.uniform(low=0.0, high=1.0)
+        img = apply_augment(img, self.name, level)
+        return img        
 
 _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
 
 from torchvision.transforms import transforms
 
-def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcrop=False):
+def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcrop=False, aug_idx=None):
 
     print('args: name, ontopof, randomcrop', name, ontopof_mocov2, randomcrop)
     if randomcrop: 
@@ -327,13 +336,16 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
     else: 
         random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
 
-    # if not gauss: 
-    #     transform_train = transforms.Compose([
-    #         random_crop,
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-    #     ])
+    if name == 'single_crop_study': 
+        transform_train = transforms.Compose([
+            transforms.RandomHorizontalFlip(), 
+            transforms.ToTensor(), 
+            transforms.Normalize(_CIFAR_MEAN, CIFAR_STD)
+            ])
+        
+        transform_train.insert(0, SingleAugmentation(aug_idx))
+
+        return transfrom_train, None
 
     if ontopof_mocov2: 
         transform_train = transforms.Compose([
@@ -411,8 +423,6 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
         transform_train.transforms.insert(0, Augmentation(fa_rrc_min_rot_top2()))
     elif name == 'rrc_min_max_top2': 
         transform_train.transforms.insert(0, Augmentation(fa_rrc_min_max_top2()))
-
-    print(transform_train)
     transform_test = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),

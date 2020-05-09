@@ -155,6 +155,8 @@ parser.add_argument('--rand_resize_only', action='store_true', help='Use only ra
 parser.add_argument('--custom_aug_name', default=None, type=str, 
     help='name of custom augmentation')
 
+parser.add_argument('--single_arg_study', default=None)
+
 ngpus_per_node = torch.cuda.device_count()
 
 def main():
