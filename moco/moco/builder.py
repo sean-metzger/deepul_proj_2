@@ -150,9 +150,9 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, head, im_q, im_k=None):
+    def forward(self, head, im_q, im_k=None, evaluate=False):
         if head=="moco":
-            return self.moco_forward(im_q, im_k)
+            return self.moco_forward(im_q, im_k, evaluate)
         elif head=="rotnet":
             return self.model[head](self.model["encoder"](im_q))
         else:

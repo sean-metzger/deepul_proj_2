@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from RandAugment import RandAugment
+# from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -154,6 +154,7 @@ parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugmen
 parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
 parser.add_argument('--custom_aug_name', default=None, type=str, 
     help='name of custom augmentation')
+parser.add_argument('--single_aug_idx', default=None, type=int, help='Which of the single augmentations to use')
 
 ngpus_per_node = torch.cuda.device_count()
 
@@ -373,7 +374,7 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]    
 
-    elif args.rand_resize_only:
+    elif args.rand_resize_only and args.custom_aug_name == None:
         print("Using random resize only")
         augmentation = [
             random_resized_crop, 
@@ -382,6 +383,14 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ] 
         
+
+        
+    elif not args.custom_aug_name == None: 
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name, 
+            ontopof_mocov2=not(args.rand_resize_only), randomcrop=args.randomcrop,
+            aug_idx=args.single_aug_idx)
+        transformations = moco.loader.TwoCropsTransform(augmentation)
+
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
@@ -393,12 +402,13 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]
 
-    if not args.faa_aug:
+
+
+    if not args.faa_aug and args.custom_aug_name == None:
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
-    elif not args.custom_aug_name == None: 
-        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name)
-        transformations = moco.loader.TwoCropsTransform(augmentation)
+
+    print('xforms', transformations)
 
     if args.dataid == "imagenet":
         train_dataset = datasets.ImageFolder(
