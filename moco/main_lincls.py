@@ -336,8 +336,6 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataid =="cifar10":
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
-
-
     #  Original normalization
     else:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -349,8 +347,8 @@ def main_worker(gpu, ngpus_per_node, args):
         crop_size = 28
         orig_size = 32
     else:
-        orig_size = 256
         crop_size = 224
+        orig_size = 256
 
     if not args.randomcrop:
         crop_transform = transforms.RandomResizedCrop(crop_size)
@@ -488,6 +486,20 @@ def main_worker(gpu, ngpus_per_node, args):
                     'optimizer' : optimizer.state_dict(),
                 }, savefile)
                 wandb.save(savefile)
+
+            # save the current epoch
+            if args.task == "rotation": 
+                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_rotation_current.tar".format(args.id[:5]))
+            else: 
+                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_current.tar".format(args.id[:5]))
+            torch.save({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer' : optimizer.state_dict(),
+            }, savefile)
+            
 
 def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
     batch_time = AverageMeter(args.loss_prefix + 'LinCls Time', ':6.3f')
