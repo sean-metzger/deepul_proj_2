@@ -49,7 +49,7 @@ parser.add_argument('--checkpoint-interval', default=50, type=int,
 parser.add_argument('--checkpoint_fp', type=str, default='checkpoints/', help='where to store checkpoint')
 
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn'))
 
 parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
@@ -187,7 +187,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # CIFAR 10 mod
 
-    if args.dataid =="cifar10":
+    if args.dataid =="cifar10" or args.dataid =="svhn":
     # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
@@ -333,7 +333,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Chanigng this for CIFAR10.
 
-    if args.dataid =="cifar10":
+    if args.dataid =="cifar10" or args.dataid=="svhn":
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
     #  Original normalization
@@ -364,6 +364,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                                          transforms.ToTensor(),
                                                          normalize,
                                                      ]), download=False)
+
+
     else:
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),

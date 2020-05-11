@@ -50,7 +50,7 @@ parser.add_argument('--name', type=str, default=default_id, help='wandb id/name'
 parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
@@ -220,6 +220,8 @@ def main_worker(gpu, ngpus_per_node, args):
     if not(args.custom_aug_name == None): 
         CHECKPOINT_ID += "_custom_aug_" + args.custom_aug_name
 
+    CHECKPOINT_ID += args.dataid
+
     args.gpu = gpu
 
     # suppress printing if not master
@@ -322,7 +324,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # Set up crops and normalization depending on the dataset.
 
     # Cifar 10 crops and normalization.
-    if args.dataid == "cifar10":
+    if args.dataid == "cifar10" or args.dataid =="svhn":
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
         if not args.randomcrop:
@@ -332,7 +334,7 @@ def main_worker(gpu, ngpus_per_node, args):
             random_resized_crop = transforms.RandomCrop(32, padding=4)
 
     # Use the imagenet parameters.
-    else:
+    elif args.dataid == "imagenet":
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
@@ -425,6 +427,11 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = torchvision.datasets.CIFAR10(args.data,
                                                      transform=transformations,
                                                      download=True)
+
+    elif args.dataid == "svhn": 
+        train_dataset = torchvision.datasets.SVHN(args.data, 
+            transform=transformations, 
+            download=True)
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
 

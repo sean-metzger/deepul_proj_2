@@ -25,7 +25,7 @@ base_name = 'resnet50_750epochs_512bsz_0.4000lr_0.9000mtm_120-160sched_128.0000m
 checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 
 pretraineds = [
-'e46Ll_2000epochs_512bsz_0.4000lr_mlp_cos_custom_aug_rrc_min_max_1999'
+'7JnEs_100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_rrc_pure_0099'
 ]
 
 for pretrained in pretraineds:
@@ -43,6 +43,8 @@ for pretrained in pretraineds:
     string += ' --rank 0'
     string += ' --pretrained /userdata/smetzger/all_deepul_files/ckpts/' + pretrained + '.tar'
     string += " --data /userdata/smetzger/data/cifar_10/ --notes 'faa_top1_valid_rot_as_feedback'"
+    string += ' --schedule 10 20 --epochs 50'
+    string += ' --task rotation'
     cmd = shlex.split(string)
     print(cmd)
     subprocess.run(cmd, stderr=subprocess.STDOUT)
