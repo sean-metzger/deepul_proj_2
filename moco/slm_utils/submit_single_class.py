@@ -2,7 +2,7 @@ print('Sko Buffs')
 import subprocess
 import shlex
 import os 
-
+import time
 
 def find_model(name, epochs, basepath="/userdata/smetzger/all_deepul_files/ckpts"):
     """
@@ -22,30 +22,37 @@ def find_model(name, epochs, basepath="/userdata/smetzger/all_deepul_files/ckpts
             
     return path_list, file_list
 
-base_name = '100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_single_aug_study_'
-checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
+for custom_aug in ['rrc_pure']:
 
-models, files = find_model(base_name, 100)
+    base_name = '100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_' + custom_aug + 'svhn'
+    # CaUWi_100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_single_aug_studysvhn_0099
+    print(base_name)
+    checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 
-print(models)
-print(len(models))
-for model, name in zip(models, files): 
-    filename = '/userdata/smetzger/all_deepul_files/runs/lincls_' + name + '_lincls.txt'
-    string = "submit_job -q mind-gpu"
-    string += " -m 318 -g 4"
-    string += " -o " + filename
-    string += ' -n kf_lincls'
-    string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
+    models, files = find_model(base_name, 100)
 
-    # add all the default args: 
-    string += " -a resnet50 --lr 15.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
-    string += ' --checkpoint_fp ' + str(checkpoint_fp)
-    string += ' --rank 0'
-    string += ' --pretrained ' + model
-    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_single_aug'"
-    string += " --task rotation"
-    string += " --schedule 10 20 --epochs 50"
+    print(models)
+    print(len(models))
 
-    cmd = shlex.split(string)
-    print(cmd)
-    subprocess.run(cmd, stderr=subprocess.STDOUT)
+    for task in ['rotation']: 
+
+        for model, name in zip(models, files): 
+            filename = '/userdata/smetzger/all_deepul_files/runs/lincls_' + name[:-4] + '_rotation.txt'
+            string = "submit_job -q mind-gpu"
+            string += " -m 318 -g 4"
+            string += " -o " + filename
+            string += ' -n lincls'
+            string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
+
+            # add all the default args: 
+            string += " -a resnet50 --lr 15.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
+            string += ' --checkpoint_fp ' + str(checkpoint_fp)
+            string += ' --rank 0'
+            string += ' --pretrained ' + model
+            string += " --data /userdata/smetzger/data/cifar_10/ --notes 'training_single_aug'"
+            string += " --task " + task
+            string += " --schedule 10 20 --epochs 50"
+
+            cmd = shlex.split(string)
+            print(cmd)
+            subprocess.run(cmd, stderr=subprocess.STDOUT)

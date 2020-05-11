@@ -174,7 +174,7 @@ def augment_list(for_autoaug=True):  # 16 oeprations and their ranges
         (Brightness, 0.1, 1.9),  # 12
         (Sharpness, 0.1, 1.9),  # 13
         (Cutout, 0, 0.2),  # 14
-        # (SamplePairing(imgs), 0, 0.4),  # 15
+        # (SamplePairing(imgs), 0, 0.4),  # 15 
     ]
     if for_autoaug:
         l += [
@@ -245,14 +245,14 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 import pickle
 def load_policies(name): 
     """Takes in the name of a policy, loads it from the policies directory."""
-    path = './slm_utils/policies/' + name + '.pkl'
+    path = '/userdata/smetzger/all_deepul_files/deepul_proj/moco/slm_utils/policies/' + name + '.pkl'
     with open(path, 'rb') as f: 
         policies = pickle.load(f)
         return policies
     
 from torchvision.transforms import transforms
 
-def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcrop=False, aug_idx=None):
+def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomcrop=False, aug_idx=None):
 
     print('args: name, ontopof, randomcrop', name, ontopof_mocov2, randomcrop)
     if randomcrop: 

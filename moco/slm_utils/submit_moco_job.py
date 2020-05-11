@@ -40,6 +40,7 @@ for custom_aug_name in custom_aug_names:
 	# Huge line here, submit custom agumentations: 
 	string += ' --custom_aug_name ' + custom_aug_name
 	string += ' --checkpoint-interval 250'
+	string += ' --dataid svhn'
 
 
 	# # HUGE LINE: only use rand_resize_crop as the base xform.

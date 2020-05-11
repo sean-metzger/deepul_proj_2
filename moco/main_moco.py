@@ -30,6 +30,8 @@ import slm_utils.get_faa_transforms
 import moco.loader
 import moco.builder
 
+import numpy as np
+
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -432,6 +434,8 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
+        print(lengths)
+        lengths[-1] = int(lengths[-1] + (len(train_dataset)-np.sum(lengths)))
         print(lengths)
         folds = torch.utils.data.random_split(train_dataset, lengths )
         print(len(folds))

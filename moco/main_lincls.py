@@ -343,7 +343,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Readded some data augmentations for training this part.
 
-    if args.dataid == "cifar10":
+    if args.dataid == "cifar10" or args.dataid=="svhn":
         crop_size = 28
         orig_size = 32
     else:
@@ -358,6 +358,15 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
+                                                     transform= transforms.Compose([
+                                                         crop_transform,
+                                                         transforms.RandomHorizontalFlip(),
+                                                         transforms.ToTensor(),
+                                                         normalize,
+                                                     ]), download=False)
+
+    elif args.dataid == "svhn": 
+        train_dataset = torchvision.datasets.SVHN(args.data,
                                                      transform= transforms.Compose([
                                                          crop_transform,
                                                          transforms.RandomHorizontalFlip(),
@@ -388,6 +397,9 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.dataid == "cifar10":
             val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
                                                        download=True, train=False)
+        elif args.dataid == "svhn": 
+            val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
+                                                       download=True, train=False)
         else:
             valdir = os.path.join(args.data, 'val')
             val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
@@ -398,8 +410,13 @@ def main_worker(gpu, ngpus_per_node, args):
             ]))
     else: 
         # use the held out train data as the validation data. 
-        val_dataset = torchvision.datasets.CIFAR10(args.data,
+        if args.dataid == "cifar10": 
+            val_dataset = torchvision.datasets.CIFAR10(args.data,
+                transform= val_transform, download=True)
+        elif args.dataid == "svhn": 
+            val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
+
 
 
     if not args.kfold == None: 

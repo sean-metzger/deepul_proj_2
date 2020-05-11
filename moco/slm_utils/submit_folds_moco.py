@@ -35,7 +35,7 @@ for fold in range (5):
     string = "submit_job -q mind-gpu"
     string += " -m 318 -g 4"
     string += " -o " + filename
-    string += ' -n svhn'ß
+    string += ' -n svhn'
     string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_moco.py'
 
     # add all the default args: 
@@ -51,6 +51,7 @@ for fold in range (5):
     string += ' --rand_resize_only'
     string += ' --dataid svhn'
     string += ' --mlp --cos --epochs 750'
+    string += ' --checkpoint-interval 250'
     string += ' --kfold %d' %fold # FUCK!!!!
 
     cmd = shlex.split(string)
