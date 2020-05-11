@@ -233,7 +233,7 @@ class Augmentation(object):
         
 class SingleAugmentation(object): 
     def __init__(self, aug_idx): 
-        self.name = augment_list(False)[aug_idx]
+        self.name = augment_list(False)[aug_idx][0].__name__
 
     def __call__(self, img): 
         level = np.random.uniform(low=0.0, high=1.0)
@@ -244,7 +244,7 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
 import pickle
 def load_policies(name): 
-	"""Takes in the name of a policy, loads it from the policies directory."""
+    """Takes in the name of a policy, loads it from the policies directory."""
     path = './slm_utils/policies/' + name + '.pkl'
     with open(path, 'rb') as f: 
         policies = pickle.load(f)
@@ -260,16 +260,16 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
     else: 
         random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
 
-    if name == 'single_crop_study': 
+    if name == 'single_aug_study': 
         transform_train = transforms.Compose([
             transforms.RandomHorizontalFlip(), 
             transforms.ToTensor(), 
-            transforms.Normalize(_CIFAR_MEAN, CIFAR_STD)
+            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD)
             ])
 
-        transform_train.insert(0, SingleAugmentation(aug_idx))
+        transform_train.transforms.insert(0, SingleAugmentation(aug_idx))
 
-        return transfrom_train, None
+        return transform_train, None
 
     if ontopof_mocov2: 
         transform_train = transforms.Compose([

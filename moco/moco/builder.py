@@ -26,7 +26,7 @@ class MoCo(nn.Module):
         # num_classes does not matter here
         encoder = base_encoder(num_classes=128)
 
-        if dataid =="cifar10": 
+        if dataid =="cifar10" or dataid =='svhn': 
             # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too. 
             encoder.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False) 
             # Get rid of maxpool, as in SIMCLR cifar10 experiments. 
@@ -60,7 +60,7 @@ class MoCo(nn.Module):
             if mlp:
                 self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.encoder_k.fc)
                 
-            if dataid=="cifar10":
+            if dataid=="cifar10" or dataid == "svhn":
                 self.encoder_k.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
                 self.encoder_k.maxpool = nn.Identity()
                 
