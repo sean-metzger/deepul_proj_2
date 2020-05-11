@@ -244,7 +244,7 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
 import pickle
 def load_policies(name): 
-	"""Takes in the name of a policy, loads it from the policies directory."""
+    """Takes in the name of a policy, loads it from the policies directory."""
     path = './slm_utils/policies/' + name + '.pkl'
     with open(path, 'rb') as f: 
         policies = pickle.load(f)
