@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-# from RandAugment import RandAugment
+from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -150,8 +150,11 @@ parser.add_argument('--nomoco', action='store_true', help='set true to **not** h
 # RandAug
 parser.add_argument('--rand_aug', action='store_true', help='use RandAugment (set m and n appropriately)')
 parser.add_argument('--rand_aug_m', default=9, type=int, help='RandAugment M (magnitude of augments)')
-parser.add_argument('--rand_aug_n', default=3, type=int, help='RandAugment N (number of augs)')
+parser.add_argument('--rand_aug_n', default=2, type=int, help='RandAugment N (number of augs)')
 parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugment orginal transforms')
+parser.add_argument('--rand_aug_linear_m', action='store_true', help='use RandAugment and scale m linearly')
+parser.add_argument('--rand_aug_m_min', default=4, type=int, help='RandAugment M when linearly scaling')
+parser.add_argument('--rand_aug_m_max', default=11, type=int, help='RandAugment M when linearly scaling')
 
 parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
 parser.add_argument('--custom_aug_name', default=None, type=str, 
@@ -369,11 +372,16 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]    
     elif args.rand_aug:
-        print("Using random aug")
+        if args.rand_aug_linear_m:
+            print("Using random aug with linear m")
+            randaug = RandAugment(args.rand_aug_n, args.rand_aug_m_min)
+        else:
+            print("Using random aug")
+            randaug = RandAugment(args.rand_aug_n, args.rand_aug_m)
         augmentation = [
             random_resized_crop,
             transforms.RandomHorizontalFlip(),
-            RandAugment(args.rand_aug_n, args.rand_aug_m),
+            randaug,
             transforms.ToTensor(),
             normalize
         ]    
@@ -405,7 +413,6 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize
         ]
-
 
 
     if not args.faa_aug and args.custom_aug_name == None:
@@ -467,6 +474,11 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
+
+        if args.rand_aug_linear_m:
+            mval = args.rand_aug_m_min + math.floor(float(epoch) / float(args.epochs) * (args.rand_aug_m_max - args.rand_aug_m_min + 1))
+            print("Rand aug m: {}".format(mval))
+            randaug.m = mval
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
