@@ -34,8 +34,6 @@ import ray.tune as tune
 
 # FOR DEBUG
 class Args:
-
-
     base = 'moco_rrc'  # Moco or moco_rrc
 
     # if base == 'moco': 
@@ -44,7 +42,7 @@ class Args:
     # else: 
     # checkpoints = ['6bV5F', 'Pr3wZ', '43Hdo','h18r9', 'TcXI9']
 
-    checkpoints = ['']
+    checkpoints = [''] # SVHN rrc checkpoint names
     checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
     data = '/userdata/smetzger/data/cifar_10/'
     
@@ -157,7 +155,6 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
 
         # Insert the new transforms in to the training transforms. 
         transform_train.transforms.insert(0, Augmentation(augmentations))
-        
         # Use the twocrops transform. 
         if loss_type == "icl": 
             transform_train = moco.loader.TwoCropsTransform(transform_train)
@@ -171,8 +168,15 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
                                                      download=True)
 
     # In FAA They use Train Transform as well. 
-    val_dataset = torchvision.datasets.CIFAR10(args.data, transform=transform_train, 
-        download=True)
+
+    if args.dataid == "cifar10":
+        val_dataset = torchvision.datasets.CIFAR10(args.data, transform=transform_train, 
+            download=True)
+
+    elif args.dataid == "svhn": 
+        val_dataset = torchvision.datasets.SVHN(args.data, transform=transform_train, 
+            download=True)
+
     
 
     if get_train: 
