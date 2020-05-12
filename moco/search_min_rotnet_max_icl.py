@@ -38,11 +38,13 @@ class Args:
 
     base = 'moco_rrc'  # Moco or moco_rrc
 
-    if base == 'moco': 
-        checkpoints = ['fxrZE', 'lJu2W', 'rdEIg', 'esdq2' ,'vnhKs'] # Ordered KFOLDS order. Make this nicer.
+    # if base == 'moco': 
+    #     checkpoints = ['fxrZE', 'lJu2W', 'rdEIg', 'esdq2' ,'vnhKs'] # Ordered KFOLDS order. Make this nicer.
     
-    else: 
-        checkpoints = ['6bV5F', 'Pr3wZ', '43Hdo','h18r9', 'TcXI9']
+    # else: 
+    # checkpoints = ['6bV5F', 'Pr3wZ', '43Hdo','h18r9', 'TcXI9']
+
+    checkpoints = ['']
     checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
     data = '/userdata/smetzger/data/cifar_10/'
     
@@ -50,14 +52,14 @@ class Args:
     num_op = 2
     num_policy=5
     num_search = 200
-    dataid = 'cifar10'
+    dataid = 'svhn'
     cv_ratio=1.0
     smoke_test=False
     resume=False
     arch = 'resnet50'
     distributed=False
-    loss = 'rotation'# one of rotation, supervised, icl, icl_and_rotation.
-    base = 'moco_rrc' # Name for what we are saving our training runs as.
+    loss = 'icl_and_rotation'# one of rotation, supervised, icl, icl_and_rotation.
+#     base = 'moco_rrc' # Name for what we are saving our training runs as.
 
     # Moco args. 
     moco_k = 65536
@@ -73,11 +75,13 @@ class Args:
     rotnet = False
     
     moco_dim = 128
+    dim_mlp = 2048
+    
     policy_dir = '/userdata/smetzger/all_deepul_files/policies'
     
     # Remember we are trying to max negative loss, so a negative here
     # is like maximizing, a positive here is like minimizing. 
-    loss_weights = {'rotation': 1, 'icl': -1, 'supervised':1} # weight for ICL, and ROTATION. Divide by mean.
+    loss_weights = {'rotation': 1/.9, 'icl': -1/6.65, 'supervised':1} # weight for ICL, and ROTATION. Divide by mean.
 
     
 args=Args()
@@ -111,7 +115,7 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
             traindir,
             transformations)
 
-    elif args.dataid == "cifar10":
+    elif args.dataid == "cifar10" or args.dataid == "svhn":
 
         # THe default training transforms we use when training the CIFAR10 network. 
         transform_train = transforms.Compose([
@@ -126,18 +130,29 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
         if loss_type == "icl": 
             
             random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+           
+            if 'rrc' in args.base:
+                transform_train = transforms.Compose([
+                    random_resized_crop, 
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD)
+                ])
             
-            transform_train = transforms.Compose([
-            random_resized_crop,
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-            ])
+            else: 
+                transform_train = transforms.Compose([
+                random_resized_crop,
+                transforms.RandomApply([
+                    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+                ], p=0.8),
+                transforms.RandomGrayscale(p=0.2),
+                transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
+                ])
+
+        
 
 
         # Insert the new transforms in to the training transforms. 
@@ -248,19 +263,25 @@ def load_model(cv_fold, loss_type):
         savefile = os.path.join(args.checkpoint_fp, 
                                  "{}_lincls_best_rotation.tar".format(args.checkpoints[cv_fold]))
 
+    
     elif loss_type == 'icl': 
+#         print('ICL')
         heads = {}
         if not args.nomoco:
             heads["moco"] = {
             "num_classes": args.moco_dim
         }
         
+#         print(heads)
+
         model = moco.builder.MoCo(
             models.__dict__[args.arch],
             K=args.moco_k, m=args.moco_m, T=args.moco_t, mlp=args.mlp, dataid=args.dataid,
             multitask_heads=heads
         )
         savefile = find_model(args.checkpoints[cv_fold], cv_fold)
+        
+        print(savefile)
         
     ckpt = torch.load(savefile, map_location="cpu")
     state_dict = ckpt['state_dict']
@@ -275,7 +296,7 @@ def load_model(cv_fold, loss_type):
 
 
     
-m = load_model(0, args.loss)    
+# m = load_model(0, args.loss)    
 
 def rotate_images(images):
     nimages = images.shape[0]
@@ -395,7 +416,7 @@ def eval_augmentations(config):
 
 
                     losses = np.concatenate(losses)
-                    print(losses.shape)
+#                     print(losses.shape)
 #                     print('losses shape' , losses.shape) This would usually just be 5*512, 
                     losses_min = np.mean(losses) # get it so it averages out intead of taking the smallest losses. 
                     corrects = np.concatenate(corrects)
@@ -458,7 +479,7 @@ for _ in range(2):  # 2 experiments from FAA.
     for cv_fold in range(cv_num): # For the 5 folds. 
         name = "slm_moco_min_max_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
-            max_concurrent=8,
+            max_concurrent=4, # TODO Up this. 
             metric=reward_attr,
             mode='max')
 

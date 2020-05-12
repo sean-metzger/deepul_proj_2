@@ -423,6 +423,8 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
+        import numpy as np
+        lengths[-1] = int(lengths[-1] + (len(train_dataset)-np.sum(lengths)))
         print(lengths)
         folds = torch.utils.data.random_split(train_dataset, lengths)
         folds.pop(args.kfold)
@@ -432,6 +434,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print('pre split val', val_dataset)
         torch.manual_seed(1337)
         lengths = [len(val_dataset)//5]*5
+        lengths[-1] = int(lengths[-1] + (len(val_dataset)-np.sum(lengths)))
+        print(lengths)
         folds = torch.utils.data.random_split(val_dataset, lengths)
         val_dataset = folds[args.kfold]
         print('len val', len(val_dataset))
