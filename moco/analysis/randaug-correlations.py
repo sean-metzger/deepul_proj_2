@@ -3,6 +3,7 @@ import argparse
 import pandas as pd
 import wandb
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Read in a csv file
 # For each run, compute the # min X loss
@@ -62,7 +63,6 @@ def main(args):
                 sup_acc_100 = []
                 rot_acc_100 = []
                 icl_loss = []
-                acc1 = []
                 for row in run.scan_history():
                     if 'val-classify' in row:
                         if is100:
@@ -80,14 +80,11 @@ def main(args):
                             rot_acc.append(row['val-rotation'])
                     if 'Loss' in row:
                         icl_loss.append(row['Loss'])
-                    if 'Acc@1' in row:
-                        acc1.append(row['Acc@1'])
                 sup_acc = np.array(sup_acc)
                 rot_acc = np.array(rot_acc)
                 sup_acc_100 = np.array(sup_acc_100)
                 rot_acc_100 = np.array(rot_acc_100)
                 icl_loss = np.array(icl_loss)
-                acc1 = np.array(acc1)
 
                 append_data = { "id": id }
 
@@ -103,9 +100,6 @@ def main(args):
                 if len(rot_acc_100):
                     append_data["max_rot_acc_100"] = rot_acc_100.max()
                     append_data["mean_rot_acc_100"] = rot_acc_100[-args.avg_n:].mean()
-                if len(acc1):
-                    append_data["max_acc1"] = acc1.max()
-                    append_data["mean_acc1"] = acc1[-args.avg_n:].mean()
                 if len(icl_loss):
                     append_data["min_icl_loss"] = icl_loss.min()
                     append_data["mean_icl_loss"] = icl_loss[-args.avg_n:].mean()
@@ -116,11 +110,83 @@ def main(args):
             data.to_pickle(args.output_pkl)
     else:
         print("Reading pkl file")
-        data = pd.read_pkl(args.input_pkl)
-        import ipdb; ipdb.set_trace()
-            
+        data = pd.read_pickle(args.input_pkl)
+        
     print(data.corr().to_markdown())
+
+    # see plots here https://jwalton.info/Embed-Publication-Matplotlib-Latex/
+    # Using seaborn's style
+    plt.style.use('seaborn-darkgrid')
+
+    # With LaTex fonts
+    # plt.style.use('tex')    
+    width=345
+    fig, ax = plt.subplots(1, 1, figsize=set_size(width))
+    ax.plot('max_rot_acc', 'max_sup_acc', data=data, linestyle='none', marker='o', alpha=0.5, markersize=4, color='green')
+    ax.plot('max_rot_acc_100', 'max_sup_acc_100', data=data, linestyle='none', marker='o', alpha=0.5, markersize=4, color='green')
+    ax.set_facecolor((.93, .93, .93))
     
+    ax.set_xlim((20, 75))
+    ax.set_ylim((5, 95))
+    plt.ylabel('C10 supervised classification acc.')
+    plt.xlabel('CIFAR 10 rotation acc.')
+    fig.savefig('rand_aug_rotnet.pdf', format='pdf', bbox_inches='tight')
+    
+    
+    # plot the icl
+    fig, ax = plt.subplots(1, 1, figsize=set_size(width))
+    ax.plot('mean_icl_loss', 'max_sup_acc', data=data, linestyle='none', marker='o', alpha=0.5, markersize=4, color='red')
+    ax.plot('mean_icl_loss', 'max_sup_acc_100', data=data, linestyle='none', marker='o', alpha=0.5, markersize=4, color='red')
+    ax.set_facecolor((.93, .93, .93))
+    
+    # ax.set_xlim((20, 75))
+    ax.set_ylim((5, 95))
+    plt.ylabel('C10 supervised classification acc.')
+    plt.xlabel('CIFAR 10 Instance Contrastive Loss')
+    fig.savefig('rand_aug_icl_correlation.pdf', format='pdf', bbox_inches='tight')
+    
+    # TODO add a robust linear regression fit
+
+    
+    # TODO separate out the various correlation parameters
+    
+
+    
+
+
+def set_size(width, fraction=1):
+    """ Set figure dimensions to avoid scaling in LaTeX.
+
+    Parameters
+    ----------
+    width: float
+            Document textwidth or columnwidth in pts
+    fraction: float, optional
+            Fraction of the width which you wish the figure to occupy
+
+    Returns
+    -------
+    fig_dim: tuple
+            Dimensions of figure in inches
+    """
+    # Width of figure (in pts)
+    fig_width_pt = width * fraction
+
+    # Convert from pt to inches
+    inches_per_pt = 1 / 72.27
+
+    # Golden ratio to set aesthetic figure height
+    # https://disq.us/p/2940ij3
+    golden_ratio = (5**.5 - 1) / 2
+
+    # Figure width in inches
+    fig_width_in = fig_width_pt * inches_per_pt
+    # Figure height in inches
+    fig_height_in = fig_width_in * golden_ratio
+
+    fig_dim = (fig_width_in, fig_height_in)
+
+    return fig_dim
 
 
 
