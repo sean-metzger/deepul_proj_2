@@ -399,7 +399,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                                        download=True, train=False)
         elif args.dataid == "svhn": 
             val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
-                                                       download=True, train=False)
+                                                       download=True, split='test')
         else:
             valdir = os.path.join(args.data, 'val')
             val_dataset = datasets.ImageFolder(valdir, transforms.Compose([

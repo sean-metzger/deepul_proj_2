@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from RandAugment import RandAugment
+# from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -398,10 +398,13 @@ def main_worker(gpu, ngpus_per_node, args):
 
         
     elif not args.custom_aug_name == None: 
-        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name, 
-            ontopof_mocov2=not(args.rand_resize_only), randomcrop=args.randomcrop,
+        augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name, randomcrop=args.randomcrop,
             aug_idx=args.single_aug_idx)
+        
+        print('using custom augs', augmentation)
+
         transformations = moco.loader.TwoCropsTransform(augmentation)
+
 
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978

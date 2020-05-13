@@ -245,6 +245,7 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 import pickle
 def load_policies(name): 
     """Takes in the name of a policy, loads it from the policies directory."""
+    print('loading augs called', name)
     path = '/userdata/smetzger/all_deepul_files/deepul_proj/moco/slm_utils/policies/' + name + '.pkl'
     with open(path, 'rb') as f: 
         policies = pickle.load(f)
@@ -272,6 +273,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomc
         return transform_train, None
 
     if ontopof_mocov2: 
+        print("ON TOP OF MOCOV2. THIS IS CATASTROPHIC")
         transform_train = transforms.Compose([
             random_crop,
             transforms.RandomApply([
