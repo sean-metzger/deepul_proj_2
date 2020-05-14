@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-# from RandAugment import RandAugment
+from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
