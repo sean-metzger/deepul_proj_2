@@ -8,6 +8,7 @@ import random
 import shutil
 import time
 import warnings
+import math
 
 import torchvision
 import torch
@@ -22,6 +23,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from sklearn.model_selection import StratifiedShuffleSplit
 
 
 # ONLINE LOGGING
@@ -116,6 +118,8 @@ parser.add_argument('--loss-prefix', default="", type=str,
 
 parser.add_argument('--kfold', default=None, type=int, 
                     help = "which fold we're looking at")
+parser.add_argument('--percent', default=100, type=int, 
+                    help = "Percent of training data to use")
 
 best_acc1 = 0
 
@@ -364,6 +368,16 @@ def main_worker(gpu, ngpus_per_node, args):
                                                          transforms.ToTensor(),
                                                          normalize,
                                                      ]), download=False)
+        if args.percent < 100:
+            train_size = math.floor(50000 * (args.percent / 100.0))
+            print("Using {} percent of cifar training data: {} samples".format(args.percent, train_size))
+            import ipdb; ipdb.set_trace()
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=50000-train_size, random_state=0)
+            sss = sss.split(list(range(len(train_dataset))), train_dataset.targets)
+            train_idx, valid_idx = next(sss)
+            targets = [train_dataset.targets[idx] for idx in train_idx]
+            train_dataset = torch.utils.data.Subset(train_dataset, train_idx)
+            train_dataset.targets = targets
 
     elif args.dataid == "svhn": 
         train_dataset = torchvision.datasets.SVHN(args.data,
@@ -374,7 +388,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                                          normalize,
                                                      ]), download=False)
 
-
+        if args.percent < 100:
+            raise Exception("Percent setting not yet implemented for svhn")
     else:
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
@@ -384,6 +399,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ToTensor(),
                 normalize,
         ]))
+        if args.percent < 100:
+            raise Exception("Percent setting not yet implemented for imagenet")
 
 
     val_transform = transforms.Compose([
