@@ -371,7 +371,6 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.percent < 100:
             train_size = math.floor(50000 * (args.percent / 100.0))
             print("Using {} percent of cifar training data: {} samples".format(args.percent, train_size))
-            import ipdb; ipdb.set_trace()
             sss = StratifiedShuffleSplit(n_splits=1, test_size=50000-train_size, random_state=0)
             sss = sss.split(list(range(len(train_dataset))), train_dataset.targets)
             train_idx, valid_idx = next(sss)
