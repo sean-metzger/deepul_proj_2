@@ -35,19 +35,19 @@ checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 # ]
 
 pretraineds = [
-'G2uGA_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_supervisedsvhn_0749', 
-'DPm1k_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_max_iclsvhn_0749',
-'IbGVw_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_min_iclsvhn_0749',
-'qdd7t_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_rotationsvhn_0749',
-'LChIK_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_minmaxsvhn_0749',
-'V1w1D_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_minmax_weightedsvhn_0749',
+# 'G2uGA_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_supervisedsvhn_0749', 
+# 'DPm1k_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_max_iclsvhn_0749',
+# 'IbGVw_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_min_iclsvhn_0749',
+# 'qdd7t_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_rotationsvhn_0749',
+# 'LChIK_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_minmaxsvhn_0749',
+'mtRW3_750epochs_512bsz_0.4000lr_mlp_augplus_cossvhn_0749',
 ]
 
 
-for pretrained in pretraineds:
-    for task in ['classify', 'rotation']:
+for task in ['classify']:
+    for pretrained in pretraineds:
 
-        filename = '/userdata/smetzger/all_deepul_files/runs/lincls_moco_' + pretrained + '.txt'
+        filename = '/userdata/smetzger/all_deepul_files/runs/lincls_REDO_' + pretrained + '.txt'
         string = "submit_job -q mind-gpu"
         string += " -m 318 -g 4"
         string += " -o " + filename
@@ -59,7 +59,7 @@ for pretrained in pretraineds:
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
         string += ' --pretrained /userdata/smetzger/all_deepul_files/ckpts/' + pretrained + '.tar'
-        string += " --data /userdata/smetzger/data/cifar_10/ --notes 'rrc_with_faa'"
+        string += " --data /userdata/smetzger/data/cifar_10/ --notes 'pure rrc'"
         string += ' --schedule 10 20 --epochs 50'
         string += ' --task ' + task
 

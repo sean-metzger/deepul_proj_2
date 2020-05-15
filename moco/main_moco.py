@@ -24,7 +24,11 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-# from RandAugment import RandAugment
+from imagenet import ImageNet, SubsetSampler # Kakao brain stuff. 
+from sklearn.model_selection import StratifiedShuffleSplit
+from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
+
+from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
 
 import moco.loader
@@ -161,7 +165,13 @@ parser.add_argument('--custom_aug_name', default=None, type=str,
     help='name of custom augmentation')
 parser.add_argument('--single_aug_idx', default=None, type=int, help='Which of the single augmentations to use')
 
+parser.add_argument('--reduced_imgnet', action='store_true', help='Use the 6k imagenet examples')
+
 ngpus_per_node = torch.cuda.device_count()
+
+
+
+
 
 def main():
     args = parser.parse_args()
@@ -341,8 +351,10 @@ def main_worker(gpu, ngpus_per_node, args):
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
+
+        
     if args.aug_plus and (args.faa_aug or 
-                          args.rand_aug or args.rand_aug_orig):
+                          args.rand_aug or args.rand_aug_orig or not(args.custom_aug_name == None)):
         raise Exception("Cannot have multiple augs on command line")
        
     if args.aug_plus:
@@ -399,7 +411,7 @@ def main_worker(gpu, ngpus_per_node, args):
         
     elif not args.custom_aug_name == None: 
         augmentation, _ = slm_utils.get_faa_transforms.load_custom_transforms(name=args.custom_aug_name, randomcrop=args.randomcrop,
-            aug_idx=args.single_aug_idx)
+            aug_idx=args.single_aug_idx, dataid=args.dataid)
         
         print('using custom augs', augmentation)
 
@@ -424,10 +436,62 @@ def main_worker(gpu, ngpus_per_node, args):
 
     print('xforms', transformations)
 
-    if args.dataid == "imagenet":
+    if args.dataid == "imagenet" and not args.reduced_imgnet:
         train_dataset = datasets.ImageFolder(
             args.data,
             transformations)
+
+    elif args.dataid == "imagenet" and args.reduced_imgnet: 
+        idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
+        total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
+        testset = ImageNet(root=args.data, split='val', transform=transformations)
+
+        # compatibility
+        total_trainset.targets = [lb for _, lb in total_trainset.samples]
+
+
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=len(total_trainset) - 50000, random_state=0)  # 4000 trainset
+        sss = sss.split(list(range(len(total_trainset))), total_trainset.targets)
+        train_idx, valid_idx = next(sss)
+
+        # filter out
+        train_idx = list(filter(lambda x: total_trainset.targets[x] in idx120, train_idx))
+        valid_idx = list(filter(lambda x: total_trainset.targets[x] in idx120, valid_idx))
+        test_idx = list(filter(lambda x: testset.samples[x][1] in idx120, range(len(testset))))
+
+        targets = [idx120.index(total_trainset.targets[idx]) for idx in train_idx]
+        for idx in range(len(total_trainset.samples)):
+            if total_trainset.samples[idx][1] not in idx120:
+                continue
+            total_trainset.samples[idx] = (total_trainset.samples[idx][0], idx120.index(total_trainset.samples[idx][1]))
+        total_trainset = Subset(total_trainset, train_idx)
+        total_trainset.targets = targets
+
+        for idx in range(len(testset.samples)):
+            if testset.samples[idx][1] not in idx120:
+                continue
+            testset.samples[idx] = (testset.samples[idx][0], idx120.index(testset.samples[idx][1]))
+        testset = Subset(testset, test_idx)
+        print('reduced_imagenet train=', len(total_trainset))
+
+
+        train_sampler = None
+
+        split = .15 # How much of each split to use in the test_data. 
+        sss = StratifiedShuffleSplit(n_splits=5, test_size=split, random_state=0)
+        sss = sss.split(list(range(len(total_trainset))), total_trainset.targets)
+        for _ in range(args.kfold + 1):
+            train_idx, valid_idx = next(sss)
+
+        train_dataset = total_trainset
+        train_sampler = SubsetRandomSampler(train_idx)
+        valid_sampler = SubsetSampler(valid_idx)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(Subset(train_dataset, train_idx))
+
+        print('train_sampler', train_sampler)
+
+
+       
     elif args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
                                                      transform=transformations,
@@ -440,7 +504,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
 
-    if not args.kfold == None: 
+    if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
@@ -455,12 +519,13 @@ def main_worker(gpu, ngpus_per_node, args):
         print(len(train_dataset))
 
     else: 
-        print("NO KFOLD ARG", args.kfold)
+        print("NO KFOLD ARG", args.kfold, ' or ', args.reduced_imgnet)
     
-    if args.distributed:
+    if args.distributed and not args.reduced_imgnet:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:
+    elif not args.reduced_imgnet:
         train_sampler = None
+    print('train sampler', train_sampler)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),

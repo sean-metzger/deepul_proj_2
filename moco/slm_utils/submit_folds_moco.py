@@ -35,7 +35,7 @@ for fold in range (5):
     string = "submit_job -q mind-gpu"
     string += " -m 318 -g 4"
     string += " -o " + filename
-    string += ' -n svhn'
+    string += ' -n inetkf'
     string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_moco.py'
 
     # add all the default args: 
@@ -43,16 +43,16 @@ for fold in range (5):
     string += ' --moco-t 0.2' # MoCov2 arguments. 
     string += ' --checkpoint_fp ' + str(checkpoint_fp)
     string += ' --rank 0'
-    string += " --data /userdata/smetzger/data/cifar_10/ --notes 'KFOLDS for randomresizecrop'"
+    string += " --data /userdata/smetzger/data/imagenet/imagenet12/ --notes 'imagenet'"
 
 
     # THIS LINE IS HUGE: TRAIN THE ROTNET HEAD.
     # string += ' --rotnet --nomoco' # We are only training rotnets. 
-    string += ' --rand_resize_only'
-    string += ' --dataid svhn'
-    string += ' --mlp --cos --epochs 750'
+    string += ' --dataid imagenet'
+    string += ' --mlp --cos --epochs 500'
     string += ' --checkpoint-interval 250'
-    string += ' --kfold %d' %fold # FUCK!!!!
+    string += ' --kfold %d' %fold 
+    string += ' --reduced_imgnet' # REDUCED IMAGENET
 
     cmd = shlex.split(string)
     print(cmd)
