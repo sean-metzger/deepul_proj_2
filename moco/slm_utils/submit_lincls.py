@@ -40,11 +40,11 @@ pretraineds = [
 # 'IbGVw_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_min_iclsvhn_0749',
 # 'qdd7t_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_rotationsvhn_0749',
 # 'LChIK_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_minmaxsvhn_0749',
-'mtRW3_750epochs_512bsz_0.4000lr_mlp_augplus_cossvhn_0749',
+'RCFrc_750epochs_512bsz_0.4000lr_mlp_augplus_cos_0749'
 ]
 
 
-for task in ['classify']:
+for task in ['rotation']:
     for pretrained in pretraineds:
 
         filename = '/userdata/smetzger/all_deepul_files/runs/lincls_REDO_' + pretrained + '.txt'
@@ -64,7 +64,7 @@ for task in ['classify']:
         string += ' --task ' + task
 
         # HUGE LINE
-        string += " --dataid svhn"
+        # string += " --dataid cifar"
 
         cmd = shlex.split(string)
         print(cmd)

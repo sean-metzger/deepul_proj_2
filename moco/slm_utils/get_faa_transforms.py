@@ -294,7 +294,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomc
 
     else: 
 
-        if dataid == imagenet: 
+        if dataid == 'imagenet': 
                 transform_train = transforms.Compose([
                 random_crop,
                 transforms.RandomHorizontalFlip(),

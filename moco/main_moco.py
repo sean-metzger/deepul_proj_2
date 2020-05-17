@@ -421,6 +421,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
+        print('using v1 augs')
         augmentation = [
             random_resized_crop,
             transforms.RandomGrayscale(p=0.2),
@@ -445,50 +446,41 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.dataid == "imagenet" and args.reduced_imgnet: 
         idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
         total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
-        testset = ImageNet(root=args.data, split='val', transform=transformations)
+        train_idx = np.arange(len(total_trainset))
 
-        # compatibility
-        total_trainset.targets = [lb for _, lb in total_trainset.samples]
+        np.random.seed(1337) #fingers crossed. 
+        np.random.shuffle(train_idx)
+        train_idx = train_idx[:50000]
 
+        kfold = args.kfold
 
-        sss = StratifiedShuffleSplit(n_splits=1, test_size=len(total_trainset) - 50000, random_state=0)  # 4000 trainset
-        sss = sss.split(list(range(len(total_trainset))), total_trainset.targets)
-        train_idx, valid_idx = next(sss)
+        print('KFOLD BEING USED', kfold)
+        subset = np.arange(kfold*10000, (kfold+1)*10000)
+        print('start', 'end', kfold*10000, (kfold+1)*10000)
+        valid_idx = train_idx[subset]
+        train_idx = np.delete(train_idx, subset)
 
-        # filter out
-        train_idx = list(filter(lambda x: total_trainset.targets[x] in idx120, train_idx))
-        valid_idx = list(filter(lambda x: total_trainset.targets[x] in idx120, valid_idx))
-        test_idx = list(filter(lambda x: testset.samples[x][1] in idx120, range(len(testset))))
-
-        targets = [idx120.index(total_trainset.targets[idx]) for idx in train_idx]
-        for idx in range(len(total_trainset.samples)):
-            if total_trainset.samples[idx][1] not in idx120:
-                continue
-            total_trainset.samples[idx] = (total_trainset.samples[idx][0], idx120.index(total_trainset.samples[idx][1]))
-        total_trainset = Subset(total_trainset, train_idx)
-        total_trainset.targets = targets
-
-        for idx in range(len(testset.samples)):
-            if testset.samples[idx][1] not in idx120:
-                continue
-            testset.samples[idx] = (testset.samples[idx][0], idx120.index(testset.samples[idx][1]))
-        testset = Subset(testset, test_idx)
-        print('reduced_imagenet train=', len(total_trainset))
-
-
-        train_sampler = None
-
-        split = .15 # How much of each split to use in the test_data. 
-        sss = StratifiedShuffleSplit(n_splits=5, test_size=split, random_state=0)
-        sss = sss.split(list(range(len(total_trainset))), total_trainset.targets)
-        for _ in range(args.kfold + 1):
-            train_idx, valid_idx = next(sss)
+        print('first val_idx', valid_idx[:10])
 
         train_dataset = total_trainset
+
+        train_dataset = Subset(train_dataset, train_idx)
         train_sampler = SubsetRandomSampler(train_idx)
         valid_sampler = SubsetSampler(valid_idx)
-        train_sampler = torch.utils.data.distributed.DistributedSampler(Subset(train_dataset, train_idx))
 
+        print(len(train_dataset))
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        print(len(train_dataset))
+
+
+        print('first 10 train', train_idx[:10])
+        print('first 10 valid', valid_idx[:10])
+        print('len train', len(train_idx))
+        print('len valid', len(valid_idx))
+
+        for i in valid_idx: 
+            if i in train_idx: 
+                print("WOW U FUCKED UP")
         print('train_sampler', train_sampler)
 
 
@@ -504,7 +496,7 @@ def main_worker(gpu, ngpus_per_node, args):
             download=True)
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
-
+    
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
@@ -523,14 +515,19 @@ def main_worker(gpu, ngpus_per_node, args):
         print("NO KFOLD ARG", args.kfold, ' or ', args.reduced_imgnet)
     
     if args.distributed and not args.reduced_imgnet:
+        print("YOU FUCKED UP!!!!!!!!!")
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif not args.reduced_imgnet:
         train_sampler = None
     print('train sampler', train_sampler)
 
+    torch.manual_seed(1337)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+
+
+    print(len(train_loader))
 
     # CR: only the master will report to wandb for now
     if not args.multiprocessing_distributed or args.rank % ngpus_per_node == 0:

@@ -25,6 +25,12 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from sklearn.model_selection import StratifiedShuffleSplit
 
+import numpy as np
+
+
+from imagenet import ImageNet, SubsetSampler # Kakao brain stuff. 
+from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
+
 
 # ONLINE LOGGING
 import wandb
@@ -121,6 +127,8 @@ parser.add_argument('--kfold', default=None, type=int,
 parser.add_argument('--percent', default=100, type=int, 
                     help = "Percent of training data to use")
 
+parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced imagenet (6k) for faa")
+
 best_acc1 = 0
 
 
@@ -197,6 +205,8 @@ def main_worker(gpu, ngpus_per_node, args):
         model.maxpool = nn.Identity()
         n_output_classes = 10
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+
+
     if args.task == "rotation":
         print("Using 4 output classes for rotation")
         n_output_classes = 4
@@ -389,7 +399,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for svhn")
-    else:
+
+
+    elif args.dataid == 'imagenet' and not args.reduced_imgnet:
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
             transforms.Compose([
@@ -400,6 +412,65 @@ def main_worker(gpu, ngpus_per_node, args):
         ]))
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for imagenet")
+
+    elif args.dataid == "imagenet" and args.reduced_imgnet: 
+
+        import numpy as np
+        idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
+        total_trainset = ImageNet(root=args.data, transform=transforms.Compose([
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+        ])) 
+
+        total_valset = ImageNet(root=args.data, transform=transforms.Compose([
+            transforms.Resize(orig_size),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+            normalize,
+        ])) 
+
+        train_idx = np.arange(len(total_trainset))
+
+        np.random.seed(1337) #fingers crossed. 
+        np.random.shuffle(train_idx)
+        train_idx = train_idx[:50000]
+
+        kfold = args.kfold
+
+        print('KFOLD BEING USED', kfold)
+        subset = np.arange(kfold*10000, (kfold+1)*10000)
+        print('start', 'end', kfold*10000, (kfold+1)*10000)
+        valid_idx = train_idx[subset]
+        train_idx = np.delete(train_idx, subset)
+
+        print('first val_idx', valid_idx[:10])
+        print('firstidx', valid_idx[:10])
+
+        train_dataset = total_trainset
+        valid_dataset = total_valset
+
+        train_dataset = Subset(train_dataset, train_idx)
+        valid_dataset = Subset(valid_dataset, valid_idx)
+
+        val_dataset = valid_dataset
+
+        # train_sampler = SubsetRandomSampler(train_idx)
+        # valid_sampler = SubsetSampler(valid_idx)
+
+        print('len train', len(train_dataset))
+
+        print('len valid', len(val_dataset))
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        print(len(train_dataset))
+
+
+        print('first 10 train', train_idx[:10])
+        print('first 10 valid', valid_idx[:10])
+        print('len train', len(train_idx))
+        print('len valid', len(valid_idx))
+        print('first val_idx', valid_idx[:10])
 
 
     val_transform = transforms.Compose([
@@ -417,13 +488,19 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
                                                        download=True, split='test')
         else:
-            valdir = os.path.join(args.data, 'val')
-            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ]))
+            if not args.reduced_imgnet:
+                valdir = os.path.join(args.data, 'val')
+                print('loaded full validation set')
+                val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            else: 
+                print('u must specify a fold for use with reduced imgnet flag!!!')
+
+
     else: 
         # use the held out train data as the validation data. 
         if args.dataid == "cifar10": 
@@ -432,10 +509,11 @@ def main_worker(gpu, ngpus_per_node, args):
         elif args.dataid == "svhn": 
             val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
+        elif args.dataid == "imagenet" and args.reduced_imgnet: 
+            val_dataset = val_dataset
 
 
-
-    if not args.kfold == None: 
+    if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
@@ -457,13 +535,16 @@ def main_worker(gpu, ngpus_per_node, args):
         print('len val', len(val_dataset))
 
     else: 
-        print("NO KFOLD ARG", args.kfold)
+        print("NO KFOLD ARG", args.kfold, 'or ur using reduced imgnet', args.reduced_imgnet)
 
 
-    if args.distributed:
+    if args.distributed and not args.reduced_imgnet:
+        print("U GOOFED")
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:
+    elif not args.reduced_imgnet:
         train_sampler = None
+
+    print('train sampler', train_sampler)
 
     # CR: only the master will report to wandb for now
     is_main_node = not args.multiprocessing_distributed or args.gpu == 0
@@ -479,10 +560,18 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+    # if not args.reduced_imgnet:
+
+    print('length of val dataset', len(val_dataset))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
+    # else: # we add the sampler
+    #     val_loader = torch.utils.data.DataLoader(
+    #         val_dataset,
+    #         batch_size=args.batch_size, shuffle=False,
+    #         num_workers=args.workers, pin_memory=True, sampler=valid_sampler)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args, is_main_node)
