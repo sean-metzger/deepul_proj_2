@@ -468,7 +468,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print('len train', len(train_dataset))
 
         print('len valid', len(val_dataset))
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        # train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         print(len(train_dataset))
 
 
@@ -542,7 +542,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print("NO KFOLD ARG", args.kfold, 'or ur using reduced imgnet', args.reduced_imgnet)
 
 
-    if args.distributed :
+    if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
         train_sampler = None
