@@ -34,7 +34,7 @@ epochs = 750
 i = 0
 
 for task in ['rotation']: 
-    for fold in range (5): 
+    for fold in range (1): # TOD CHANGE BACK TO 5 
         filename = '/userdata/smetzger/all_deepul_files/runs/lincls_new_' + 'imgnet' + '_fold_%d' %fold + '_' + task + '_kfold.txt'
         # string = "submit_job -q mind-gpu"
         # string += " -m 318 -g 4"
@@ -54,15 +54,16 @@ for task in ['rotation']:
         string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
 
         # add all the default args: 
-        string += " -a resnet50 --lr 30.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
+        string += " -a resnet50 --lr 1.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
         string += " --data /userdata/smetzger/data/imagenet/imagenet12/  --notes 'training_rotnet'"
         string += " --task " + task
-        string += " --schedule 30 40 --epochs 50"
+        string += " --schedule 30 40 --epochs 13"
         string += " --dataid imagenet"
         string += " --reduced_imgnet"
         string += " --kfold %d" %fold
+        string += ' --newid'
 
         base_name = '500epochs_128bsz_0.0150lr_mlp_cos_fold_%dimagenet_0499' %fold
 

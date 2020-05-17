@@ -509,8 +509,6 @@ def main_worker(gpu, ngpus_per_node, args):
         elif args.dataid == "svhn": 
             val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
-        elif args.dataid == "imagenet" and args.reduced_imgnet: 
-            val_dataset = val_dataset
 
 
     if not args.kfold == None and not args.reduced_imgnet: 
@@ -538,10 +536,9 @@ def main_worker(gpu, ngpus_per_node, args):
         print("NO KFOLD ARG", args.kfold, 'or ur using reduced imgnet', args.reduced_imgnet)
 
 
-    if args.distributed and not args.reduced_imgnet:
-        print("U GOOFED")
+    if args.distributed :
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    elif not args.reduced_imgnet:
+    else:
         train_sampler = None
 
     print('train sampler', train_sampler)
