@@ -40,6 +40,9 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 #########
 # WANDB #
 #########
+parser.add_argument('--newid', action='store_true',
+                    help='give the run a new id on wandb (appends to loaded id)')
+
 parser.add_argument('--notes', type=str, default='', help='wandb notes')
 default_id = ''.join([random.choice(string.ascii_letters + string.digits) for n in range(32)])
 parser.add_argument('--name', type=str, default=default_id, help='wandb id/name')
@@ -235,7 +238,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 state_dict = state_dict['encoder']
             if checkpoint.get('id'):
                 # sync the ids for wandb
-                args.id = checkpoint['id']
+                if args.newid:
+                    args.id = checkpoint['id'] + "_{}".format(args.id[:5])
+                else:
+                    args.id = checkpoint['id']
                 name = args.id
                 wandb_resume = True
             if checkpoint.get('name'):
