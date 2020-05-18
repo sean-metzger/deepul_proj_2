@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import sys
+import math
 import argparse
 import pandas as pd
 import wandb
@@ -14,6 +15,7 @@ parser = argparse.ArgumentParser(description='SelfAugment post-analysis script f
 parser.add_argument('--project', type=str, default='autoself', help='wandb project name')
 parser.add_argument('--avg_n', type=int, default=10, help='average number of epochs for computing average stats')
 parser.add_argument('--entity', type=str, default='cjrd', help='wandb entity name')
+# TODO generalize this argument?
 parser.add_argument('--is100', action='store_true', help='run evaluations took place at 100 epochs but did not use the 100epoch prefix.')
 
 ########
@@ -76,6 +78,11 @@ def main(args):
         if len(icl_loss):
             update_data["min_icl_loss"] = icl_loss.min()
             update_data["mean_icl_loss"] = icl_loss[-args.avg_n:].mean()
+            if args.is100:
+                update_data["mean_icl_loss_100"] = icl_loss[-args.avg_n:].mean()
+            else:
+                fifth_train = math.floor(len(icl_loss)/5.0)
+                update_data["mean_icl_loss_100"] = icl_loss[fifth_train-args.avg_n:fifth_train].mean()
         for key, val in update_data.items():
             run.summary[key] = val
         run.update()
