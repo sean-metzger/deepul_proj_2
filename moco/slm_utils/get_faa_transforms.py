@@ -174,7 +174,7 @@ def augment_list(for_autoaug=True):  # 16 oeprations and their ranges
         (Brightness, 0.1, 1.9),  # 12
         (Sharpness, 0.1, 1.9),  # 13
         (Cutout, 0, 0.2),  # 14
-        # (SamplePairing(imgs), 0, 0.4),  # 15
+        # (SamplePairing(imgs), 0, 0.4),  # 15 
     ]
     if for_autoaug:
         l += [
@@ -245,57 +245,71 @@ _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 import pickle
 def load_policies(name): 
     """Takes in the name of a policy, loads it from the policies directory."""
-    path = './slm_utils/policies/' + name + '.pkl'
+    print('loading augs called', name)
+    path = '/userdata/smetzger/all_deepul_files/deepul_proj/moco/slm_utils/policies/' + name + '.pkl'
     with open(path, 'rb') as f: 
         policies = pickle.load(f)
         return policies
     
 from torchvision.transforms import transforms
 
-def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcrop=False, aug_idx=None):
+def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomcrop=False, aug_idx=None, dataid='cifar10'):
 
-    print('args: name, ontopof, randomcrop', name, ontopof_mocov2, randomcrop)
-    if randomcrop: 
-        random_crop = transforms.RandomCrop(32, padding=4)
-    else: 
-        random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+    print('args: name, ontopof, randomcrop dataid', name, ontopof_mocov2, randomcrop, dataid)
+
+    if dataid == 'cifar10' or dataid == 'svhn':
+
+        
+        if randomcrop: 
+            random_crop = transforms.RandomCrop(32, padding=4)
+        else: 
+            random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+
+    elif dataid == 'imagenet': 
+
+        random_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
+
 
     if name == 'single_aug_study': 
-        transform_train = transforms.Compose([
-            transforms.RandomHorizontalFlip(), 
-            transforms.ToTensor(), 
-            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD)
-            ])
+
+        if dataid == 'imagenet': 
+            transform_train = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(), 
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+                ])
+        else: 
+            transform_train = transforms.Compose([
+                transforms.RandomHorizontalFlip(), 
+                transforms.ToTensor(), 
+                transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD)
+                ])
 
         transform_train.transforms.insert(0, SingleAugmentation(aug_idx))
 
         return transform_train, None
 
-    if ontopof_mocov2: 
-        transform_train = transforms.Compose([
-            random_crop,
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-        ])
-
     else: 
-        transform_train = transforms.Compose([
-            random_crop,
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-        ])
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-    ])
+        if dataid == 'imagenet': 
+                transform_train = transforms.Compose([
+                random_crop,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ])
+
+        else: 
+            transform_train = transforms.Compose([
+                random_crop,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
+            ])
 
     if name == 'rrc_pure': 
         print('not adding anything')
@@ -307,6 +321,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=True, randomcr
         transforms.ToTensor(),
         transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
     ])
+
     return transform_train, transform_test
 
 def get_faa_transforms_cifar_10(randomcrop=False, gauss=False):

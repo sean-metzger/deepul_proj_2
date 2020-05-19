@@ -21,7 +21,7 @@ custom_aug_names = ['rrc_pure']
 
 for custom_aug_name in custom_aug_names: 
  
-	filename = '/userdata/smetzger/all_deepul_files/runs/moco_' + custom_aug_name + '_fresh_restarted_fuq.txt'
+	filename = '/userdata/smetzger/all_deepul_files/runs/moco_baseline_augs_fresh_restarted_fuq.txt'
 	string = "submit_job -q mind-gpu"
 	string += " -m 318 -g 4"
 	string += " -o " + filename
@@ -33,19 +33,16 @@ for custom_aug_name in custom_aug_names:
 	string += ' --moco-t 0.2' # MoCov2 arguments. 
 	string += ' --checkpoint_fp ' + str(checkpoint_fp)
 	string += ' --rank 0'
-	string += " --data /userdata/smetzger/data/cifar_10/ --notes 'minmax_fresh_til_2k'"
+	string += " --data /userdata/smetzger/data/cifar_10/ --notes 'fresh_750_SVHN_mocov2'"
 
-	string += ' --mlp --cos --epochs 100'
+	string += ' --mlp --cos --epochs 750'
 
-	# Huge line here, submit custom agumentations: 
-	string += ' --custom_aug_name ' + custom_aug_name
 	string += ' --checkpoint-interval 250'
+	string += ' --dataid svhn'
 
 
 	# # HUGE LINE: only use rand_resize_crop as the base xform.
-	string += ' --rand_resize_only'
-	# string += ' --resume ' + checkpoint_fp + '/SsAyL_2000epochs_512bsz_0.4000lr_mlp_augplus_cos_1750.tar'
-	# string += ' --start-epoch 1750'
+	string += ' --aug-plus'
 
 	cmd = shlex.split(string)
 	print(cmd)

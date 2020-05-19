@@ -8,6 +8,7 @@ import random
 import shutil
 import time
 import warnings
+import math
 
 import torchvision
 import torch
@@ -22,6 +23,13 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from sklearn.model_selection import StratifiedShuffleSplit
+
+import numpy as np
+
+
+from imagenet import ImageNet, SubsetSampler # Kakao brain stuff. 
+from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
 
 
 # ONLINE LOGGING
@@ -38,6 +46,9 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 #########
 # WANDB #
 #########
+parser.add_argument('--newid', action='store_true',
+                    help='give the run a new id on wandb (appends to loaded id)')
+
 parser.add_argument('--notes', type=str, default='', help='wandb notes')
 default_id = ''.join([random.choice(string.ascii_letters + string.digits) for n in range(32)])
 parser.add_argument('--name', type=str, default=default_id, help='wandb id/name')
@@ -105,6 +116,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
+parser.add_argument('--copy_exact_weights', action='store_true', help='copy the exact encoder weights')
+
 parser.add_argument('--pretrained', default='', type=str,
                     help='path to moco pretrained checkpoint')
 parser.add_argument('--mlp', action='store_true',
@@ -116,6 +129,10 @@ parser.add_argument('--loss-prefix', default="", type=str,
 
 parser.add_argument('--kfold', default=None, type=int, 
                     help = "which fold we're looking at")
+parser.add_argument('--percent', default=100, type=int, 
+                    help = "Percent of training data to use")
+
+parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced imagenet (6k) for faa")
 
 best_acc1 = 0
 
@@ -193,6 +210,8 @@ def main_worker(gpu, ngpus_per_node, args):
         model.maxpool = nn.Identity()
         n_output_classes = 10
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+
+
     if args.task == "rotation":
         print("Using 4 output classes for rotation")
         n_output_classes = 4
@@ -231,7 +250,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 state_dict = state_dict['encoder']
             if checkpoint.get('id'):
                 # sync the ids for wandb
-                args.id = checkpoint['id']
+                if args.newid:
+                    args.id = checkpoint['id'] + "_{}".format(args.id[:5])
+                else:
+                    args.id = checkpoint['id']
                 name = args.id
                 wandb_resume = True
             if checkpoint.get('name'):
@@ -245,10 +267,10 @@ def main_worker(gpu, ngpus_per_node, args):
                     # remove prefix
                     state_dict[k[len("module.model.encoder."):]] = state_dict[k]
                 elif k.startswith('module.encoder_q'):
-                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+                    if k.find("fc") < 0:
+                        state_dict[k[len("module.encoder_q."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
-                
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
             
@@ -343,7 +365,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Readded some data augmentations for training this part.
 
-    if args.dataid == "cifar10":
+    if args.dataid == "cifar10" or args.dataid=="svhn":
         crop_size = 28
         orig_size = 32
     else:
@@ -364,9 +386,30 @@ def main_worker(gpu, ngpus_per_node, args):
                                                          transforms.ToTensor(),
                                                          normalize,
                                                      ]), download=False)
+        if args.percent < 100:
+            train_size = math.floor(50000 * (args.percent / 100.0))
+            print("Using {} percent of cifar training data: {} samples".format(args.percent, train_size))
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=50000-train_size, random_state=0)
+            sss = sss.split(list(range(len(train_dataset))), train_dataset.targets)
+            train_idx, valid_idx = next(sss)
+            targets = [train_dataset.targets[idx] for idx in train_idx]
+            train_dataset = torch.utils.data.Subset(train_dataset, train_idx)
+            train_dataset.targets = targets
+
+    elif args.dataid == "svhn": 
+        train_dataset = torchvision.datasets.SVHN(args.data,
+                                                     transform= transforms.Compose([
+                                                         crop_transform,
+                                                         transforms.RandomHorizontalFlip(),
+                                                         transforms.ToTensor(),
+                                                         normalize,
+                                                     ]), download=False)
+
+        if args.percent < 100:
+            raise Exception("Percent setting not yet implemented for svhn")
 
 
-    else:
+    elif args.dataid == 'imagenet' and not args.reduced_imgnet:
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
             transforms.Compose([
@@ -375,6 +418,67 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ToTensor(),
                 normalize,
         ]))
+        if args.percent < 100:
+            raise Exception("Percent setting not yet implemented for imagenet")
+
+    elif args.dataid == "imagenet" and args.reduced_imgnet: 
+
+        import numpy as np
+        idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
+        total_trainset = ImageNet(root=args.data, transform=transforms.Compose([
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+        ])) 
+
+        total_valset = ImageNet(root=args.data, transform=transforms.Compose([
+            transforms.Resize(orig_size),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+            normalize,
+        ])) 
+
+        train_idx = np.arange(len(total_trainset))
+
+        np.random.seed(1337) #fingers crossed. 
+        np.random.shuffle(train_idx)
+        train_idx = train_idx[:50000]
+
+        kfold = args.kfold
+
+        print('KFOLD BEING USED', kfold)
+        subset = np.arange(kfold*10000, (kfold+1)*10000)
+        print('start', 'end', kfold*10000, (kfold+1)*10000)
+        valid_idx = train_idx[subset]
+        train_idx = np.delete(train_idx, subset)
+
+        print('first val_idx', valid_idx[:10])
+        print('firstidx', valid_idx[:10])
+
+        train_dataset = total_trainset
+        valid_dataset = total_valset
+
+        train_dataset = Subset(train_dataset, train_idx)
+        valid_dataset = Subset(valid_dataset, valid_idx)
+
+        val_dataset = valid_dataset
+
+        # train_sampler = SubsetRandomSampler(train_idx)
+        # valid_sampler = SubsetSampler(valid_idx)
+
+        print('len train', len(train_dataset))
+
+        print('len valid', len(val_dataset))
+        # train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        print(len(train_dataset))
+
+
+        print('first 10 train', train_idx[:10])
+        print('first 10 valid', valid_idx[:10])
+        print('len train', len(train_idx))
+        print('len valid', len(valid_idx))
+        print('first val_idx', valid_idx[:10])
 
 
     val_transform = transforms.Compose([
@@ -388,24 +492,39 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.dataid == "cifar10":
             val_dataset = torchvision.datasets.CIFAR10(args.data, transform=val_transform,
                                                        download=True, train=False)
+        elif args.dataid == "svhn": 
+            val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
+                                                       download=True, split='test')
         else:
-            valdir = os.path.join(args.data, 'val')
-            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ]))
+            if not args.reduced_imgnet:
+                valdir = os.path.join(args.data, 'val')
+                print('loaded full validation set')
+                val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            else: 
+                print('u must specify a fold for use with reduced imgnet flag!!!')
+
+
     else: 
         # use the held out train data as the validation data. 
-        val_dataset = torchvision.datasets.CIFAR10(args.data,
+        if args.dataid == "cifar10": 
+            val_dataset = torchvision.datasets.CIFAR10(args.data,
+                transform= val_transform, download=True)
+        elif args.dataid == "svhn": 
+            val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
 
 
-    if not args.kfold == None: 
+    if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
+        import numpy as np
+        lengths[-1] = int(lengths[-1] + (len(train_dataset)-np.sum(lengths)))
         print(lengths)
         folds = torch.utils.data.random_split(train_dataset, lengths)
         folds.pop(args.kfold)
@@ -415,18 +534,22 @@ def main_worker(gpu, ngpus_per_node, args):
         print('pre split val', val_dataset)
         torch.manual_seed(1337)
         lengths = [len(val_dataset)//5]*5
+        lengths[-1] = int(lengths[-1] + (len(val_dataset)-np.sum(lengths)))
+        print(lengths)
         folds = torch.utils.data.random_split(val_dataset, lengths)
         val_dataset = folds[args.kfold]
         print('len val', len(val_dataset))
 
     else: 
-        print("NO KFOLD ARG", args.kfold)
+        print("NO KFOLD ARG", args.kfold, 'or ur using reduced imgnet', args.reduced_imgnet)
 
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
         train_sampler = None
+
+    print('train sampler', train_sampler)
 
     # CR: only the master will report to wandb for now
     is_main_node = not args.multiprocessing_distributed or args.gpu == 0
@@ -442,10 +565,18 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+    # if not args.reduced_imgnet:
+
+    print('length of val dataset', len(val_dataset))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
+    # else: # we add the sampler
+    #     val_loader = torch.utils.data.DataLoader(
+    #         val_dataset,
+    #         batch_size=args.batch_size, shuffle=False,
+    #         num_workers=args.workers, pin_memory=True, sampler=valid_sampler)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args, is_main_node)

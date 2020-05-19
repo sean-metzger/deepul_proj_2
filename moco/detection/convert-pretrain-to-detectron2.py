@@ -13,10 +13,17 @@ if __name__ == "__main__":
 
     newmodel = {}
     for k, v in obj.items():
-        if not k.startswith("module.encoder_q."):
-            continue
         old_k = k
-        k = k.replace("module.encoder_q.", "")
+        if k.startswith("module.encoder_q."):
+            k = k.replace("module.encoder_q.", "")
+        elif k.startswith('module.model.encoder'):
+            k = k.replace("module.model.encoder.", "")
+        elif k.startswith('module.model.moco'):
+            k = k.replace("module.model.moco.", "fc")
+        else:
+            # print("Skipping {}".format(old_k))
+            continue
+        
         if "layer" not in k:
             k = "stem." + k
         for t in [1, 2, 3, 4]:
