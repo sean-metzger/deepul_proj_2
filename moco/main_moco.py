@@ -153,6 +153,7 @@ parser.add_argument('--rand_aug_orig', action='store_true', help='use RandAugmen
 parser.add_argument('--rand_aug_linear_m', action='store_true', help='use RandAugment and scale m linearly')
 parser.add_argument('--rand_aug_m_min', default=4, type=int, help='RandAugment M when linearly scaling')
 parser.add_argument('--rand_aug_m_max', default=11, type=int, help='RandAugment M when linearly scaling')
+parser.add_argument('--rand_aug_top_k', default=0, type=int, help='RandAugment only use the top k augments')
 
 parser.add_argument('--rand_resize_only', action='store_true', help='Use only random resized crop')
 parser.add_argument('--custom_aug_name', default=None, type=str, 
@@ -370,12 +371,17 @@ def main_worker(gpu, ngpus_per_node, args):
             normalize
         ]    
     elif args.rand_aug:
+        randaug_n = args.rand_aug_n
         if args.rand_aug_linear_m:
             print("Using random aug with linear m")
             randaug = RandAugment(args.rand_aug_n, args.rand_aug_m_min)
         else:
+            randaug_m = args.rand_aug_m
             print("Using random aug")
-            randaug = RandAugment(args.rand_aug_n, args.rand_aug_m)
+        if args.rand_aug_top_k > 0:
+            randaug = TopRandAugment(randaug_n, randaug_m, args.rand_aug_top_k)
+        else:
+            randaug = RandAugment(randaug_n, randaug_m)
         augmentation = [
             random_resized_crop,
             transforms.RandomHorizontalFlip(),
@@ -480,19 +486,19 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args, CHECKPOINT_ID)
 
         # save current epoch
-        if not args.multiprocessing_distributed or args.rank % ngpus_per_node == 0:
-            print("saving latest epoch")
-            cp_filename = "{}_latest.tar".format(CHECKPOINT_ID[:5])
-            cp_fullpath = os.path.join(args.checkpoint_fp, cp_filename)
-            torch.save({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-                'id': args.id,
-                'name': CHECKPOINT_ID,
-            }, cp_fullpath)
-            print("saved latest epoch")
+        # if not args.multiprocessing_distributed or args.rank % ngpus_per_node == 0:
+        #     print("saving latest epoch")
+        #     cp_filename = "{}_latest.tar".format(CHECKPOINT_ID[:5])
+        #     cp_fullpath = os.path.join(args.checkpoint_fp, cp_filename)
+        #     torch.save({
+        #         'epoch': epoch + 1,
+        #         'arch': args.arch,
+        #         'state_dict': model.state_dict(),
+        #         'optimizer' : optimizer.state_dict(),
+        #         'id': args.id,
+        #         'name': CHECKPOINT_ID,
+        #     }, cp_fullpath)
+        #     print("saved latest epoch")
 
 
         if (epoch % args.checkpoint_interval == 0 or epoch == args.epochs-1) \
@@ -692,6 +698,50 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+
+class TopRandAugment(RandAugment):
+    def __init__(self, n, m, topk):
+        super().__init__(n, m)
+        # l = [
+        #     (AutoContrast, 0, 1),
+        #     (Equalize, 0, 1),
+        #     (Invert, 0, 1),
+        #     (Rotate, 0, 30),
+        #     (Posterize, 0, 4),
+        #     (Solarize, 0, 256),
+        #     (SolarizeAdd, 0, 110),
+        #     (Color, 0.1, 1.9),
+        #     (Contrast, 0.1, 1.9),
+        #     (Brightness, 0.1, 1.9),
+        #     (Sharpness, 0.1, 1.9),
+        #     (ShearX, 0., 0.3),
+        #     (ShearY, 0., 0.3),
+        #     (CutoutAbs, 0, 40),
+        #     (TranslateXabs, 0., 100),
+        #     (TranslateYabs, 0., 100),
+        # ]        
+        
+        # optimal orderings from rotnet results 
+        cifar_rotnet_ordering = [
+            8, # contrast
+            15, # trans y
+            14, # trans x
+            7, # color
+            12, # shear y
+            11, # shear x
+            9, # brightness
+            4, # posterize
+            13, # cutout
+            3, # rotate
+            10, # sharpness
+            5, # solarize
+            2, # invert
+            0, # autocontrast
+            1, # equalize
+        ]
+        print("Using top {} cifar rotnet orderings in randaug".format(topk))
+        self.augment_list = [self.augment_list[i] for i in cifar_rotnet_ordering][:topk]
+        print(self.augment_list)
 
 if __name__ == '__main__':
     main()
