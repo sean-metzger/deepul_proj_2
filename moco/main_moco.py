@@ -480,7 +480,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         for i in valid_idx: 
             if i in train_idx: 
-                print("WOW U FUCKED UP")
+                raise Exception("Valid idx in train idx: this is unexpected")
         print('train_sampler', train_sampler)
 
 
@@ -515,7 +515,6 @@ def main_worker(gpu, ngpus_per_node, args):
         print("NO KFOLD ARG", args.kfold, ' or ', args.reduced_imgnet)
     
     if args.distributed and not args.reduced_imgnet:
-        print("YOU FUCKED UP!!!!!!!!!")
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif not args.reduced_imgnet:
         train_sampler = None

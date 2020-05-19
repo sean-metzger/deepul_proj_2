@@ -1,11 +1,10 @@
 #! /usr/bin/env python
 import argparse
 import pandas as pd
-import wandb
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import linear_model
-
+from imagenetresults import iresults
 # Read in a csv file
 # For each run, compute the # min X loss
 # avg X loss over last N epochs
@@ -16,45 +15,27 @@ parser = argparse.ArgumentParser(description='SelfAugment analysis script for co
 #########
 # WANDB #
 #########
-parser.add_argument('--idfile', type=str, default='', help='file containing ids of runs to analyze')
-parser.add_argument('--project', type=str, default='autoself', help='wandb project name')
-parser.add_argument('--entity', type=str, default='cjrd', help='wandb entity name')
-parser.add_argument('--prefix', type=str, default='selfaug', help='prefix to saved plots')
-parser.add_argument('--shortname', type=str, default='C-10', help='prefix to saved plots')
-parser.add_argument('--dataname', type=str, default='CIFAR-10', help='prefix to saved plots')
+parser.add_argument('--prefix', type=str, default='inet', help='prefix to saved plots')
+parser.add_argument('--shortname', type=str, default='ImageNet', help='prefix to saved plots')
+parser.add_argument('--dataname', type=str, default='ImageNet', help='prefix to saved plots')
 
 
 def main(args):
     print("Starting main with args {}".format(args))
     # here we need to setup a data frame
-    api = wandb.Api()
     
     sup_acc = []
     rot_acc = []
-    icl_loss = []
-    with open(args.idfile, 'r') as idfile:
-        print("Reading ids from idfile")
-        for id in idfile:
-            id = id.strip()
-            run = api.run("{}/{}/{}".format(args.entity, args.project, id))
-            if run.summary.get("max_sup_acc"):
-                sup_acc.append(run.summary["max_sup_acc"])
-                rot_acc.append(run.summary["max_rot_acc"])
-                icl_loss.append(run.summary["mean_icl_loss"])
-            if run.summary.get("max_sup_acc_100"):
-                sup_acc.append(run.summary["max_sup_acc_100"])
-                rot_acc.append(run.summary["max_rot_acc_100"])
-                icl_loss.append(run.summary["mean_icl_loss_100"])
 
-
-    sup_acc = [62.602,62.462,62.446,64.074,61.712]
-    rot_acc = [71.531, 72.213, 71.426, 73.217,70.625]
-    icl_loss = [6.726,6.739,6.743,6.745,6.720]
+    for entry in iresults.values():
+        if entry["val-classify"] < 0:
+            continue
+        sup_acc.append(entry["val-classify"])
+        rot_acc.append(entry["val-rotate"])
                 
     data = pd.DataFrame({
         "sup_acc": sup_acc,
         "rot_acc": rot_acc,
-        "mean_icl": icl_loss
     })
 
     corr = data.corr(method='spearman')
@@ -88,50 +69,45 @@ def main(args):
     }
     
     
-    plt.text(70.2, 64,
+    plt.text(68.2, 64,
              r'$\rho = {:0.2f}$'.format(corr.sup_acc.rot_acc),
              fontdict=font,
              bbox=dict(facecolor='white', alpha=0.7),
              verticalalignment='center')
     
-    ax.set_xlim((70, 74))
-    ax.set_ylim((60, 66))
+    ax.set_xlim((68, 75))
+    ax.set_ylim((55, 70))
     plt.ylabel('{} supervised classification acc.'.format(args.shortname))
     plt.xlabel('{} rotation acc.'.format(args.dataname))
     fig.savefig('figures/{}_rand_aug_rotnet.pdf'.format(args.prefix), format='pdf', bbox_inches='tight')
     
     
-    # plot the icl
-    fig, ax = plt.subplots(1, 1, figsize=set_size(width))
-    ax.plot('mean_icl', 'sup_acc', data=data, linestyle='none', marker='o', alpha=0.7, markersize=4, color='tab:orange')
-    ax.set_facecolor((.93, .93, .93))
+    # # plot the icl
+    # fig, ax = plt.subplots(1, 1, figsize=set_size(width))
+    # ax.plot('mean_icl', 'sup_acc', data=data, linestyle='none', marker='o', alpha=0.7, markersize=4, color='tab:orange')
+    # ax.set_facecolor((.93, .93, .93))
 
-    font["color"] = "tab:orange"
-    plt.text(6.71, 65,
-             r'$\rho = {:0.2f}$'.format(corr.sup_acc.mean_icl),
-             fontdict=font,
-             bbox=dict(facecolor='white', alpha=1.0),
-             verticalalignment='center')
-
-    
-    X = data.mean_icl
-    y = data.sup_acc
-    ransac.fit(X.to_numpy().reshape(-1,1), y)
-    line_X = np.arange(X.min(), X.max())[:, np.newaxis]
-    line_y_ransac = ransac.predict(line_X)
-    ax.plot(line_X, line_y_ransac, color='tab:orange', linewidth=1) 
-    
-    # ax.set_xlim((20, 75))
-    ax.set_ylim((60, 66))
-    ax.set_xlim((6.7,6.8))
-    plt.ylabel('{} supervised classification acc.'.format(args.shortname))
-    plt.xlabel('{} Instance Contrastive Loss'.format(args.dataname))
-    fig.savefig('figures/{}_rand_aug_icl_correlation.pdf'.format(args.prefix), format='pdf', bbox_inches='tight')
-    
-    # TODO add a robust linear regression fit
+    # font["color"] = "tab:orange"
+    # plt.text(6.71, 65,
+    #          r'$\rho = {:0.2f}$'.format(corr.sup_acc.mean_icl),
+    #          fontdict=font,
+    #          bbox=dict(facecolor='white', alpha=1.0),
+    #          verticalalignment='center')
 
     
-    # TODO separate out the various correlation parameters
+    # X = data.mean_icl
+    # y = data.sup_acc
+    # ransac.fit(X.to_numpy().reshape(-1,1), y)
+    # line_X = np.arange(X.min(), X.max())[:, np.newaxis]
+    # line_y_ransac = ransac.predict(line_X)
+    # ax.plot(line_X, line_y_ransac, color='tab:orange', linewidth=1) 
+    
+    # # ax.set_xlim((20, 75))
+    # ax.set_ylim((60, 66))
+    # ax.set_xlim((6.7,6.8))
+    # plt.ylabel('{} supervised classification acc.'.format(args.shortname))
+    # plt.xlabel('{} Instance Contrastive Loss'.format(args.dataname))
+    # fig.savefig('figures/{}_rand_aug_icl_correlation.pdf'.format(args.prefix), format='pdf', bbox_inches='tight')
     
 
     

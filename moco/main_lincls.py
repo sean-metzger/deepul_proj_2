@@ -116,6 +116,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
+parser.add_argument('--copy_exact_weights', action='store_true', help='copy the exact encoder weights')
+
 parser.add_argument('--pretrained', default='', type=str,
                     help='path to moco pretrained checkpoint')
 parser.add_argument('--mlp', action='store_true',
@@ -265,10 +267,10 @@ def main_worker(gpu, ngpus_per_node, args):
                     # remove prefix
                     state_dict[k[len("module.model.encoder."):]] = state_dict[k]
                 elif k.startswith('module.encoder_q'):
-                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+                    if k.find("fc") < 0:
+                        state_dict[k[len("module.encoder_q."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
-                
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
             

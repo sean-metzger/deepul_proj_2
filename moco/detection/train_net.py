@@ -3,12 +3,15 @@
 
 import os
 
+
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, launch
 from detectron2.evaluation import COCOEvaluator, PascalVOCDetectionEvaluator
 from detectron2.layers import get_norm
 from detectron2.modeling.roi_heads import ROI_HEADS_REGISTRY, Res5ROIHeads
+
+import wandb
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -64,12 +67,13 @@ def main(args):
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
+    wandb.init(sync_tensorboard=True)
     print("Command Line Args:", args)
     launch(
         main,
         args.num_gpus,
         num_machines=args.num_machines,
         machine_rank=args.machine_rank,
-        dist_url=args.dist_url,
+        dist_url="auto",
         args=(args,),
     )
