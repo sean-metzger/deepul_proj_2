@@ -167,7 +167,7 @@ parser.add_argument('--custom_aug_name', default=None, type=str,
     help='name of custom augmentation')
 parser.add_argument('--single_aug_idx', default=None, type=int, help='Which of the single augmentations to use')
 
-parser.add_argument('--reduced_imgnet', action='store_true', help='Use the 6k imagenet examples')
+parser.add_argument('--reduced_imgnet', action='store_true', help='Use a random set of 50k imagenet examples')
 
 ngpus_per_node = torch.cuda.device_count()
 
