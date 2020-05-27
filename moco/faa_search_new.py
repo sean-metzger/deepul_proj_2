@@ -86,9 +86,8 @@ class Args:
     
     # Remember we are trying to max negative loss, so a negative here
     # is like maximizing, a positive here is like minimizing. 
-    loss_weights = {'rotation': 1/27.4, 'icl': -1/6.65, 'supervised':1} # weight for ICL, and ROTATION. Divide by mean.
+    loss_weights = {'rotation': 1/1.21, 'icl': -1/6.65, 'supervised':1} # weight for ICL, and ROTATION. Divide by mean.
     # NOTE: WHY IS ROTATION SO MUCH HIGHER FOR IMGNET?
-    rotation_weights = [1/27.4, 1/17.8, 1/31, 1/21.5 , 1/18.64]
 
     
 args=Args()
@@ -173,7 +172,7 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
 
     # TODODODODOD: DELETE THIS UNCOMMENT. 
 
-    # transform_train.transforms.insert(0, Augmentation(augmentations))
+    transform_train.transforms.insert(0, Augmentation(augmentations))
     # Use the twocrops transform. 
     if loss_type == "icl": 
         transform_train = moco.loader.TwoCropsTransform(transform_train)
@@ -206,12 +205,12 @@ def get_dataloaders(augmentations, batch=1024, kfold=0, loss_type='icl', get_tra
 
         print('KFOLD BEING USED', kfold)
         subset = np.arange(kfold*10000, (kfold+1)*10000)
-        print('start', 'end', kfold*10000, (kfold+1)*10000)
+        # print('start', 'end', kfold*10000, (kfold+1)*10000)
         valid_idx = train_idx[subset]
         train_idx = np.delete(train_idx, subset)
 
-        print('first val_idx', valid_idx[:10])
-        print('firstidx', valid_idx[:10])
+        # print('first val_idx', valid_idx[:10])
+        # print('firstidx', valid_idx[:10])
 
         valid_dataset = Subset(valid_dataset, valid_idx)
         val_dataset = valid_dataset
@@ -333,7 +332,7 @@ def load_model(cv_fold, loss_type):
             multitask_heads=heads
         )
         savefile = find_model(args.checkpoints[cv_fold], cv_fold, epochs=500)
-        print(savefile)
+        # print(savefile)
         
     ckpt = torch.load(savefile, map_location="cpu")
     state_dict = ckpt['state_dict']
@@ -386,7 +385,7 @@ def accuracy(output, target, topk=(1,)):
 
 def eval_augmentations(config): 
     augment = config
-    print('called', augment)
+    # print('called', augment)
 
     # If we have ICL and rotation, loop over the two because of the different way we evaluate
     # Either on top of the mocov2 augs, or on top of the lincls train augs. 
@@ -469,18 +468,18 @@ def eval_augmentations(config):
 #                     print(losses.shape)
 #                     print('losses shape' , losses.shape) This would usually just be 5*512, 
                     losses_min = np.mean(losses) # get it so it averages out intead of taking the smallest losses. 
-                    print('lmin', losses_min)
+                    # print('lmin', losses_min)
                     corrects = np.concatenate(corrects)
                     corrects_max = np.max(corrects, axis=0).squeeze() # 5, 512, 
 #                     print('len corrects max', len(corrects_max), 'corrects shape', corrects.shape)
-                    losses_min *= losses.shape[0]/5 # Divide by the losses we're using. 
+                    losses_min *= losses.shape[0]/runs # Divide by the losses we're using. 
                     
                     if loss_type == 'rotation': 
 
                         # Scale the loss by 1/4 since there are 4x as many samples. 
                         metrics.add_dict({ 
-                            'minus_loss': -.25*np.sum(losses_min)*args.rotation_weights[fold],
-                            'plus_loss': .25*np.sum(losses_min)*args.rotation_weights[fold],
+                            'minus_loss': -.25*np.sum(losses_min)*args.loss_weights[loss_type],
+                            'plus_loss': .25*np.sum(losses_min)*args.loss_weights[loss_type],
                             'correct': np.sum(corrects_max)*args.loss_weights[loss_type],
                             'cnt': len(corrects_max)})
                         del corrects, corrects_max
@@ -526,18 +525,18 @@ from ray import tune
 cv_num = 5
 num_result_per_cv = 10
 
-for _ in range(2):  # 2 experiments from FAA. 
+for _ in range(2):  # TODO change to 2. 
     for cv_fold in range(cv_num): # For the 5 folds. 
         name = "slm_imgnet_min_max_%s_fold_%d" %(args.dataid, cv_fold)
         hyperopt_search=HyperOptSearch(space, 
-            max_concurrent=4*20, # TODO Up this. 
+            max_concurrent=4*20,
             metric=reward_attr,
             mode='max')
 
         results = tune.run(
             eval_augmentations, 
             name=name,
-            num_samples=1, #TODO up this.
+            num_samples=200 ,
             resources_per_trial={
                 "gpu":1
             },

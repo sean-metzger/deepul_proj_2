@@ -54,16 +54,16 @@ for task in ['rotation']:
         string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
 
         # add all the default args: 
-        string += " -a resnet50 --lr 30.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
+        string += " -a resnet50 --lr 0.5  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
         string += " --data /userdata/smetzger/data/imagenet/imagenet12/  --notes 'training_rotnet'"
         string += " --task " + task
-        string += " --schedule 30 40 --epochs 50"
+        string += " --schedule 10 20 --epochs 50"
         string += " --dataid imagenet"
         string += " --reduced_imgnet"
         string += " --kfold %d" %fold
-        string += " --newid"
+        # string += " --newid"
 
         base_name = '500epochs_128bsz_0.0150lr_mlp_cos_fold_%dimagenet_0499' %fold
 

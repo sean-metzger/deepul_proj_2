@@ -433,6 +433,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
     if not args.faa_aug and args.custom_aug_name == None:
+
+        print('using augmentation', augmentation)
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
 
@@ -496,7 +498,7 @@ def main_worker(gpu, ngpus_per_node, args):
             download=True)
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
-    
+
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))

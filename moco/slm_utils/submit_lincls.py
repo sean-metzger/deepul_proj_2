@@ -40,28 +40,39 @@ pretraineds = [
 # 'IbGVw_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_min_iclsvhn_0749',
 # 'qdd7t_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_rotationsvhn_0749',
 # 'LChIK_750epochs_512bsz_0.4000lr_mlp_cos_custom_aug_svhn_rrc_minmaxsvhn_0749',
-'RCFrc_750epochs_512bsz_0.4000lr_mlp_augplus_cos_0749'
+# 'RCFrc_750epochs_512bsz_0.4000lr_mlp_augplus_cos_0749'
+# 'vPD1V_100epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmax_weightedimagenet_0099',
+# 'cyhrS_100epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_min_rotationimagenet_0099',
+# 'L8dVe_100epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmaximagenet_0099',
+# 'LQHBT_100epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_max_iclimagenet_0099'
+# '1HnAX_200epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmaximagenet_0199',
+# '9VNn1_200epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmax_weightedimagenet_0199'
+'8MiAv_10epochs_128bsz_0.0150lr_mlp_cosimagenet_0009'
 ]
 
+ml = [4]
 
-for task in ['rotation']:
+
+i=0
+for task in ['classify']:
     for pretrained in pretraineds:
 
         filename = '/userdata/smetzger/all_deepul_files/runs/lincls_REDO_' + pretrained + '.txt'
-        string = "submit_job -q mind-gpu"
+        string = "submit_job -q mind-gpu@mind%d" %(ml[i])
         string += " -m 318 -g 4"
         string += " -o " + filename
         string += ' -n kf_lincls'
         string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
 
         # add all the default args: 
-        string += " -a resnet50 --lr 15.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
+        string += " -a resnet50 --lr 30.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
         string += ' --pretrained /userdata/smetzger/all_deepul_files/ckpts/' + pretrained + '.tar'
-        string += " --data /userdata/smetzger/data/cifar_10/ --notes 'pure rrc'"
-        string += ' --schedule 10 20 --epochs 50'
+        string += " --data /userdata/smetzger/data/imagenet/imagenet12/ --notes 'rotaysh'"
+        string += ' --schedule 30 40 --epochs 50'
         string += ' --task ' + task
+        string += ' --dataid imagenet'
 
         # HUGE LINE
         # string += " --dataid cifar"
@@ -69,3 +80,5 @@ for task in ['rotation']:
         cmd = shlex.split(string)
         print(cmd)
         subprocess.run(cmd, stderr=subprocess.STDOUT)
+
+        i += 1
