@@ -37,6 +37,8 @@ import moco.builder
 
 import numpy as np
 
+import data_loader
+
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -57,7 +59,7 @@ parser.add_argument('--name', type=str, default=default_id, help='wandb id/name'
 parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
@@ -348,7 +350,7 @@ def main_worker(gpu, ngpus_per_node, args):
             random_resized_crop = transforms.RandomCrop(32, padding=4)
 
     # Use the imagenet parameters.
-    elif args.dataid == "imagenet":
+    elif args.dataid == "imagenet" or args.dataid == "logos":
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
@@ -451,9 +453,23 @@ def main_worker(gpu, ngpus_per_node, args):
             args.data,
             transformations)
 
-    elif args.dataid == "imagenet" and args.reduced_imgnet: 
-        idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
-        total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
+    elif args.dataid == "logos" and not args.reduced_imgnet: 
+        total_trainset = data_loader.GetLoader(data_root=args.data,
+        data_list='train_images_root.txt',
+        transform=transformations)
+
+
+    elif (args.dataid == "imagenet" or args.dataid == 'logos') and args.reduced_imgnet: 
+        # idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
+        
+        if args.dataid == "imagenet":
+            total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
+        
+        else: 
+            total_trainset = data_loader.GetLoader(data_root=args.data,
+                    data_list='train_images_root.txt',
+                    transform=transformations)
+
         train_idx = np.arange(len(total_trainset))
 
         np.random.seed(1337) #fingers crossed. 

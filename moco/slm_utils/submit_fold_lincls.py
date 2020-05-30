@@ -31,13 +31,17 @@ epochs = 500
 
 i = 0
 
+mind_list = [2, 1, 8, 5, 6]
+
+names = ['7VThG', '46PlZ', '9NOo9', '9Odci', '0jG5u' ]
+
 for task in ['rotation']: 
     for fold in range (5): # TOD CHANGE BACK TO 5 
 
 
         # Stuff for my queue system
-        filename = '/userdata/smetzger/all_deepul_files/runs/lincls_new_' + 'imgnet' + '_fold_%d' %fold + '_' + task + '_kfold.txt'
-        string = "submit_job -q mind-gpu"
+        filename = '/userdata/smetzger/all_deepul_files/runs/lincls_new_' + 'logos' + '_fold_%d' %fold + '_' + task + '_kfold.txt'
+        string = "submit_job -q mind-gpu@mind%d" %mind_list[i]
         string += " -m 318 -g 4"
         string += " -o " + filename
         string += ' -n lincls'
@@ -47,21 +51,21 @@ for task in ['rotation']:
         string += " -a resnet50 --lr 0.5  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
-        string += " --data /userdata/smetzger/data/imagenet/imagenet12/  --notes 'training_rotnet'"
+        string += " --data /userdata/smetzger/data/logos/train_and_test/train/ --notes 'training_rotnet'"
         string += " --task " + task
 
 
         string += " --schedule 10 20 --epochs 50"
-        string += " --dataid imagenet"
+        string += " --dataid logos"
         string += " --reduced_imgnet"
         string += " --kfold %d" %fold
         # string += " --newid"
 
         # All your checkpoints will have this in the filename, so then you can find them to use as the pretrained model. 
-        base_name = '500epochs_128bsz_0.0150lr_mlp_cos_fold_%dimagenet_0499' %fold
+        base_name = '500epochs_128bsz_0.0150lr_mlp_cos_fold_%dlogos_0499' %fold
 
         print(base_name)
-        string += ' --pretrained ' + str(find_model(base_name, fold, epochs))
+        string += ' --pretrained ' + checkpoint_fp + '/' + names[i] + '_' + base_name + '.tar'
 
         cmd = shlex.split(string)
         print(cmd)
