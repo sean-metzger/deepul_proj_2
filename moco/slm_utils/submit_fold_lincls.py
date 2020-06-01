@@ -51,7 +51,7 @@ for task in ['rotation']:
         string += " -a resnet50 --lr 0.5  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
-        string += " --data /userdata/smetzger/data/logos/train_and_test/train/ --notes 'training_rotnet'"
+        string += " --data /userdata/smetzger/data/logos/train_and_test/ --notes 'training_rotnet'"
         string += " --task " + task
 
 

@@ -213,6 +213,11 @@ def main_worker(gpu, ngpus_per_node, args):
         n_output_classes = 10
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
+    if args.dataid == "logos": 
+        n_output_classes = 2341
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+
+
 
     if args.task == "rotation":
         print("Using 4 output classes for rotation")
@@ -377,8 +382,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.randomcrop:
         crop_transform = transforms.RandomResizedCrop(crop_size)
     else:
-        crop_transform = transforms.RandomCrop(32, padding=4)
-        crop_size=32
+        crop_transform = transforms.RandomCrop(crop_size)
 
     if args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
@@ -422,6 +426,21 @@ def main_worker(gpu, ngpus_per_node, args):
         ]))
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for imagenet")
+
+
+
+
+    elif args.dataid == 'logos' and not args.reduced_imgnet: 
+        train_dataset = data_loader.GetLoader(data_root=args.data + '/train/',
+                                data_list='train_images_root.txt',
+                                transform=transforms.Compose([
+                                crop_transform,
+                                # transforms.RandomHorizontalFlip(),
+                                transforms.ToTensor(),
+                                normalize,
+                        ]))
+
+
 
     elif (args.dataid == "imagenet" or args.dataid =="logos") and args.reduced_imgnet: 
 
@@ -519,7 +538,7 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
                                                        download=True, split='test')
         else:
-            if not args.reduced_imgnet:
+            if not args.reduced_imgnet and args.dataid == 'imagenet':
                 valdir = os.path.join(args.data, 'val')
                 print('loaded full validation set')
                 val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
@@ -528,8 +547,16 @@ def main_worker(gpu, ngpus_per_node, args):
                     transforms.ToTensor(),
                     normalize,
                 ]))
-            else: 
-                print('u must specify a fold for use with reduced imgnet flag!!!')
+
+            if args.dataid == 'logos': 
+
+                print('using logos VAL')
+                val_dataset = data_loader.GetLoader(data_root=args.data + '/test/', 
+                data_list='test_images_root.txt', transform=transforms.Compose([
+                transforms.Resize(orig_size),
+                transforms.CenterCrop(crop_size),
+                transforms.ToTensor(),
+                normalize]))
 
 
     else: 
@@ -541,6 +568,7 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
 
+    assert val_dataset.label_dict == train_dataset.label_dict
 
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)

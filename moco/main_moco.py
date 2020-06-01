@@ -454,7 +454,7 @@ def main_worker(gpu, ngpus_per_node, args):
             transformations)
 
     elif args.dataid == "logos" and not args.reduced_imgnet: 
-        total_trainset = data_loader.GetLoader(data_root=args.data,
+        train_dataset = data_loader.GetLoader(data_root=args.data,
         data_list='train_images_root.txt',
         transform=transformations)
 
