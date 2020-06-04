@@ -7,14 +7,14 @@ base_model_name = ''
 epochs = 750
 import os
 
-def find_model(name, fold, epochs, basepath="/userdata/smetzger/all_deepul_files/ckpts"):
+def find_model(name, epochs, basepath="/userdata/smetzger/all_deepul_files/ckpts"):
     """
     name = model name
     fold = which fold of the data to find. 
     epochs = how many epochs to load the checkpoint at (e.g. 750)
     """
     for file in os.listdir(basepath):
-        if name in str(file) and 'fold_%d' %fold in str(file):
+        if name in str(file):
             if str(file).endswith(str(epochs-1) + '.tar'): 
                 return os.path.join(basepath, file)
             
@@ -47,7 +47,16 @@ pretraineds = [
 # 'LQHBT_100epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_max_iclimagenet_0099'
 # '1HnAX_200epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmaximagenet_0199',
 # '9VNn1_200epochs_128bsz_0.0150lr_mlp_cos_custom_aug_imagenet_minmax_weightedimagenet_0199'
-'8MiAv_10epochs_128bsz_0.0150lr_mlp_cosimagenet_0009'
+'WGgEz',
+'vBrvy',
+'z4RXn',
+'tb6xp',
+'uPRsq',
+'NKtNL'
+# 'niorr', 
+# 'g3Chg', 
+# 'uy4nU'
+
 ]
 
 ml = [4]
@@ -58,7 +67,7 @@ for task in ['classify']:
     for pretrained in pretraineds:
 
         filename = '/userdata/smetzger/all_deepul_files/runs/lincls_REDO_' + pretrained + '.txt'
-        string = "submit_job -q mind-gpu@mind%d" %(ml[i])
+        string = "submit_job -q mind-gpu"
         string += " -m 318 -g 4"
         string += " -o " + filename
         string += ' -n kf_lincls'
@@ -68,8 +77,9 @@ for task in ['classify']:
         string += " -a resnet50 --lr 30.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
         string += ' --checkpoint_fp ' + str(checkpoint_fp)
         string += ' --rank 0'
-        string += ' --pretrained /userdata/smetzger/all_deepul_files/ckpts/' + pretrained + '.tar'
-        string += " --data /userdata/smetzger/data/imagenet/imagenet12/ --notes 'rotaysh'"
+        pretrained = find_model(pretrained, 10)
+        string += ' --pretrained ' + pretrained 
+        string += " --data /userdata/smetzger/data/imagenet/imagenet12/ --notes 'classify'"
         string += ' --schedule 30 40 --epochs 50'
         string += ' --task ' + task
         string += ' --dataid imagenet'

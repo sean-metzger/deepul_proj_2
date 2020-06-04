@@ -215,7 +215,11 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "logos": 
         n_output_classes = 2341
+
+        print('in feats', model.fc.in_features)
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+        print(model.avgpool)
+        model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
 
 
 
@@ -568,7 +572,8 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
 
-    assert val_dataset.label_dict == train_dataset.label_dict
+    if args.dataid == 'logos':
+        assert val_dataset.label_dict == train_dataset.label_dict
 
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
