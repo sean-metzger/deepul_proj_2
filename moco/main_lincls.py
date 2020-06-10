@@ -139,7 +139,9 @@ parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced im
 best_acc1 = 0
 
 
+start = time.time() 
 
+print('start time', start)
 
 def main():
     args = parser.parse_args()
@@ -387,6 +389,9 @@ def main_worker(gpu, ngpus_per_node, args):
         crop_transform = transforms.RandomResizedCrop(crop_size)
     else:
         crop_transform = transforms.RandomCrop(crop_size)
+
+
+    print(args.data)
 
     if args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
@@ -919,4 +924,9 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == '__main__':
+
+    start = time.time()
     main()
+
+    elapsed = time.time()-start
+    print('elapsed', elapsed)

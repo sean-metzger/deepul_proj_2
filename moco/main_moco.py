@@ -27,16 +27,11 @@ import torchvision.models as models
 from imagenet import ImageNet, SubsetSampler # Kakao brain stuff. 
 from sklearn.model_selection import StratifiedShuffleSplit
 from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
-
-
 from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
-
 import moco.loader
 import moco.builder
-
 import numpy as np
-
 import data_loader
 
 model_names = sorted(name for name in models.__dict__
@@ -65,6 +60,7 @@ parser.add_argument('--checkpoint-interval', default=100, type=int,
 parser.add_argument('--image-log-interval', default=10, type=int,
                     help='how often to log example images')
 parser.add_argument('--upload_checkpoints', action='store_true', help='Upload checkpoints to wandb')
+
 
 ################
 # ORIGNAL ARGS #
@@ -170,6 +166,9 @@ parser.add_argument('--custom_aug_name', default=None, type=str,
 parser.add_argument('--single_aug_idx', default=None, type=int, help='Which of the single augmentations to use')
 
 parser.add_argument('--reduced_imgnet', action='store_true', help='Use a random set of 50k imagenet examples')
+
+parser.add_argument('--sigma', type=float, default=2.0, help ='sigma for gblur')
+parser.add_argument('--rrc_param', type=float, default=.2, help='rrc lower bound')
 
 ngpus_per_node = torch.cuda.device_count()
 
@@ -344,7 +343,7 @@ def main_worker(gpu, ngpus_per_node, args):
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
         if not args.randomcrop:
-            random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+            random_resized_crop = transforms.RandomResizedCrop(28, scale=(args.rrc_param, 1.))
         else:
             # Use the crop they were using in Fast AutoAugment.
             random_resized_crop = transforms.RandomCrop(32, padding=4)
@@ -370,7 +369,7 @@ def main_worker(gpu, ngpus_per_node, args):
             ], p=0.8),
             transforms.RandomGrayscale(p=0.2),
             # TODO is this right for cifar10?
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomApply([moco.loader.GaussianBlur([args.sigma/20, args.sigma])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize
