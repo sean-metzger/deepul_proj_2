@@ -22,20 +22,20 @@ def find_model(name, epochs, basepath="/userdata/smetzger/all_deepul_files/ckpts
             
     return path_list, file_list
 
-mind_list = [1, 2, 3, 4, 5, 6]
+mind_list = [1, 2, 5, 6, 8]
 mind_list = mind_list*10
 
 iii = 0 
 
 for custom_aug in ['single_aug_study']:
 
-    base_name = '100epochs_128bsz_0.0150lr_mlp_cos_fold_0_custom_aug_' + custom_aug + 'imagenet'
+    base_name = '10epochs_128bsz_0.0150lr_mlp_cos_custom_aug_single_aug_studyimagenet_0009'
     # base_name = '100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_' + custom_aug + 'svhn'
     # CaUWi_100epochs_512bsz_0.4000lr_mlp_cos_custom_aug_single_aug_studysvhn_0099
     print(base_name)
     checkpoint_fp = '/userdata/smetzger/all_deepul_files/ckpts'
 
-    models, files = find_model(base_name, 100)
+    models, files = find_model(base_name, 10)
 
     print(models)
     print(len(models))
@@ -51,21 +51,19 @@ for custom_aug in ['single_aug_study']:
             string += ' -x python /userdata/smetzger/all_deepul_files/deepul_proj/moco/main_lincls.py'
 
             # add all the default args: 
-            string += " -a resnet50 --lr 30.0  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
+            string += " -a resnet50 --lr 0.5  --batch-size 256 --dist-url 'tcp://localhost:10001' --multiprocessing-distributed --world-size 1"
             string += ' --checkpoint_fp ' + str(checkpoint_fp)
             string += ' --rank 0'
             string += ' --pretrained ' + model
             string += " --data /userdata/smetzger/data/imagenet/imagenet12/  --notes 'training_single_aug'"
             string += " --task " + task
-            string += " --schedule 30 40 --epochs 50"
+            string += " --schedule 5 8 --epochs 13"
             string += " --dataid imagenet"
-            string += " --reduced_imgnet"
-            string += " --kfold 0"
 
             cmd = shlex.split(string)
             print(cmd)
-            # import subprocess
-            # subprocess.run(cmd, stderr=subprocess.STDOUT)
+            import subprocess
+            subprocess.run(cmd, stderr=subprocess.STDOUT)
 
             iii += 1
             print(iii)

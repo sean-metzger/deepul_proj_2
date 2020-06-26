@@ -253,7 +253,7 @@ def load_policies(name):
     
 from torchvision.transforms import transforms
 
-def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomcrop=False, aug_idx=None, dataid='cifar10'):
+def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomcrop=False, aug_idx=None, dataid='imagenet'):
 
     print('args: name, ontopof, randomcrop dataid', name, ontopof_mocov2, randomcrop, dataid)
 
@@ -265,7 +265,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomc
         else: 
             random_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
 
-    elif dataid == 'imagenet': 
+    elif dataid == 'imagenet' or dataid == 'logos': 
 
         random_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
@@ -294,7 +294,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomc
 
     else: 
 
-        if dataid == 'imagenet': 
+        if dataid == 'imagenet' or dataid == 'logos': 
                 transform_train = transforms.Compose([
                 random_crop,
                 transforms.RandomHorizontalFlip(),
@@ -317,10 +317,7 @@ def load_custom_transforms(name='moco_supervised', ontopof_mocov2=False, randomc
     	policy_list = load_policies(name)
     	transform_train.transforms.insert(0, Augmentation(policy_list))
     
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(_CIFAR_MEAN, _CIFAR_STD),
-    ])
+    transform_test = None
 
     return transform_train, transform_test
 

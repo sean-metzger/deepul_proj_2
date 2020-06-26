@@ -25,6 +25,8 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from sklearn.model_selection import StratifiedShuffleSplit
 
+import data_loader
+
 import numpy as np
 
 
@@ -60,7 +62,7 @@ parser.add_argument('--checkpoint-interval', default=50, type=int,
 parser.add_argument('--checkpoint_fp', type=str, default='checkpoints/', help='where to store checkpoint')
 
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos'))
 
 parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
@@ -143,7 +145,9 @@ parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced im
 best_acc1 = 0
 
 
+start = time.time() 
 
+print('start time', start)
 
 def main():
     args = parser.parse_args()
@@ -216,6 +220,15 @@ def main_worker(gpu, ngpus_per_node, args):
         model.maxpool = nn.Identity()
         n_output_classes = 10
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+
+    if args.dataid == "logos": 
+        n_output_classes = 2341
+
+        print('in feats', model.fc.in_features)
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+        print(model.avgpool)
+        model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
+
 
 
     if args.task == "rotation":
@@ -397,8 +410,10 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.randomcrop:
         crop_transform = transforms.RandomResizedCrop(crop_size)
     else:
-        crop_transform = transforms.RandomCrop(32, padding=4)
-        crop_size=32
+        crop_transform = transforms.RandomCrop(crop_size)
+
+
+    print(args.data)
 
     if args.dataid == "cifar10":
         train_dataset = torchvision.datasets.CIFAR10(args.data,
@@ -442,23 +457,59 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for imagenet")
 
-    elif args.dataid == "imagenet" and args.reduced_imgnet: 
+
+
+
+    elif args.dataid == 'logos' and not args.reduced_imgnet: 
+        train_dataset = data_loader.GetLoader(data_root=args.data + '/train/',
+                                data_list='train_images_root.txt',
+                                transform=transforms.Compose([
+                                crop_transform,
+                                # transforms.RandomHorizontalFlip(),
+                                transforms.ToTensor(),
+                                normalize,
+                        ]))
+
+
+
+    elif (args.dataid == "imagenet" or args.dataid =="logos") and args.reduced_imgnet: 
 
         import numpy as np
         idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
-        total_trainset = ImageNet(root=args.data, transform=transforms.Compose([
-                crop_transform,
-                transforms.RandomHorizontalFlip(),
+        
+        if args.dataid == "imagenet":
+            total_trainset = ImageNet(root=args.data, transform=transforms.Compose([
+                    crop_transform,
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+            ])) 
+
+            total_valset = ImageNet(root=args.data, transform=transforms.Compose([
+                transforms.Resize(orig_size),
+                transforms.CenterCrop(crop_size),
                 transforms.ToTensor(),
                 normalize,
-        ])) 
+            ])) 
 
-        total_valset = ImageNet(root=args.data, transform=transforms.Compose([
-            transforms.Resize(orig_size),
-            transforms.CenterCrop(crop_size),
-            transforms.ToTensor(),
-            normalize,
-        ])) 
+        else:
+
+            total_trainset = data_loader.GetLoader(data_root=args.data,
+                    data_list='train_images_root.txt',
+                    transform=transforms.Compose([
+                    crop_transform,
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+            ]))
+
+            total_valset = data_loader.GetLoader(data_root=args.data, 
+                data_list='train_images_root.txt', transform=transforms.Compose([
+                transforms.Resize(orig_size),
+                transforms.CenterCrop(crop_size),
+                transforms.ToTensor(),
+                normalize,
+            ]))
 
         train_idx = np.arange(len(total_trainset))
 
@@ -517,7 +568,7 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
                                                        download=True, split='test')
         else:
-            if not args.reduced_imgnet:
+            if not args.reduced_imgnet and args.dataid == 'imagenet':
                 valdir = os.path.join(args.data, 'val')
                 print('loaded full validation set')
                 val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
@@ -526,8 +577,16 @@ def main_worker(gpu, ngpus_per_node, args):
                     transforms.ToTensor(),
                     normalize,
                 ]))
-            else: 
-                print('u must specify a fold for use with reduced imgnet flag!!!')
+
+            if args.dataid == 'logos': 
+
+                print('using logos VAL')
+                val_dataset = data_loader.GetLoader(data_root=args.data + '/test/', 
+                data_list='test_images_root.txt', transform=transforms.Compose([
+                transforms.Resize(orig_size),
+                transforms.CenterCrop(crop_size),
+                transforms.ToTensor(),
+                normalize]))
 
 
     else: 
@@ -539,6 +598,8 @@ def main_worker(gpu, ngpus_per_node, args):
             val_dataset = torchvision.datasets.SVHN(args.data,
             transform= val_transform, download=True)
 
+    if args.dataid == 'logos':
+        assert val_dataset.label_dict == train_dataset.label_dict
 
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
@@ -887,4 +948,9 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == '__main__':
+
+    start = time.time()
     main()
+
+    elapsed = time.time()-start
+    print('elapsed', elapsed)

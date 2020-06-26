@@ -27,15 +27,12 @@ import torchvision.models as models
 from imagenet import ImageNet, SubsetSampler # Kakao brain stuff. 
 from sklearn.model_selection import StratifiedShuffleSplit
 from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
-
-
 from RandAugment import RandAugment
 import slm_utils.get_faa_transforms
-
 import moco.loader
 import moco.builder
-
 import numpy as np
+import data_loader
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -57,12 +54,13 @@ parser.add_argument('--name', type=str, default=default_id, help='wandb id/name'
 parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
                     help='how often to log example images')
 parser.add_argument('--upload_checkpoints', action='store_true', help='Upload checkpoints to wandb')
+
 
 ################
 # ORIGNAL ARGS #
@@ -167,7 +165,10 @@ parser.add_argument('--custom_aug_name', default=None, type=str,
     help='name of custom augmentation')
 parser.add_argument('--single_aug_idx', default=None, type=int, help='Which of the single augmentations to use')
 
-parser.add_argument('--reduced_imgnet', action='store_true', help='Use the 6k imagenet examples')
+parser.add_argument('--reduced_imgnet', action='store_true', help='Use a random set of 50k imagenet examples')
+
+parser.add_argument('--sigma', type=float, default=2.0, help ='sigma for gblur')
+parser.add_argument('--rrc_param', type=float, default=.2, help='rrc lower bound')
 
 ngpus_per_node = torch.cuda.device_count()
 
@@ -342,13 +343,13 @@ def main_worker(gpu, ngpus_per_node, args):
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
         if not args.randomcrop:
-            random_resized_crop = transforms.RandomResizedCrop(28, scale=(0.2, 1.))
+            random_resized_crop = transforms.RandomResizedCrop(28, scale=(args.rrc_param, 1.))
         else:
             # Use the crop they were using in Fast AutoAugment.
             random_resized_crop = transforms.RandomCrop(32, padding=4)
 
     # Use the imagenet parameters.
-    elif args.dataid == "imagenet":
+    elif args.dataid == "imagenet" or args.dataid == "logos":
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
@@ -368,7 +369,7 @@ def main_worker(gpu, ngpus_per_node, args):
             ], p=0.8),
             transforms.RandomGrayscale(p=0.2),
             # TODO is this right for cifar10?
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomApply([moco.loader.GaussianBlur([args.sigma/20, args.sigma])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize
@@ -439,6 +440,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
     if not args.faa_aug and args.custom_aug_name == None:
+
+        print('using augmentation', augmentation)
         transformations = moco.loader.TwoCropsTransform(transforms.Compose(augmentation))
 
 
@@ -449,9 +452,23 @@ def main_worker(gpu, ngpus_per_node, args):
             args.data,
             transformations)
 
-    elif args.dataid == "imagenet" and args.reduced_imgnet: 
-        idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
-        total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
+    elif args.dataid == "logos" and not args.reduced_imgnet: 
+        train_dataset = data_loader.GetLoader(data_root=args.data,
+        data_list='train_images_root.txt',
+        transform=transformations)
+
+
+    elif (args.dataid == "imagenet" or args.dataid == 'logos') and args.reduced_imgnet: 
+        # idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
+        
+        if args.dataid == "imagenet":
+            total_trainset = ImageNet(root=args.data, transform=transformations) # TODO for LINCLS, make this train and test xforms.
+        
+        else: 
+            total_trainset = data_loader.GetLoader(data_root=args.data,
+                    data_list='train_images_root.txt',
+                    transform=transformations)
+
         train_idx = np.arange(len(total_trainset))
 
         np.random.seed(1337) #fingers crossed. 
@@ -502,7 +519,7 @@ def main_worker(gpu, ngpus_per_node, args):
             download=True)
     else:
         raise NotImplementedError("Support for the following dataset is not yet implemented: {}".format(args.dataid))
-    
+
     if not args.kfold == None and not args.reduced_imgnet: 
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
