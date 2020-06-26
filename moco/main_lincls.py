@@ -113,6 +113,9 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 
+parser.add_argument('--evaluate_interval', default=1, type=int)
+parser.add_argument('--finetune', action='store_true', help='copy the exact encoder weights')
+
 parser.add_argument('--randomcrop', action='store_true',
                     help='use the random crop instead of randomresized crop, for FAA augmentations')
 
@@ -131,6 +134,9 @@ parser.add_argument('--kfold', default=None, type=int,
                     help = "which fold we're looking at")
 parser.add_argument('--percent', default=100, type=int, 
                     help = "Percent of training data to use")
+
+parser.add_argument('--fewshot', action='store_true',
+                    help='is this fewshot')
 
 parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced imagenet (6k) for faa")
 
@@ -218,9 +224,13 @@ def main_worker(gpu, ngpus_per_node, args):
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
     # freeze all layers but the last fc
-    for name, param in model.named_parameters():
-        if name not in ['fc.weight', 'fc.bias']:
-            param.requires_grad = False
+    if not args.finetune:
+        print("\n\n\nNOT finetuning\n\n\n")
+        for name, param in model.named_parameters():
+            if name not in ['fc.weight', 'fc.bias']:
+                param.requires_grad = False
+    else:
+        print("\n\n\nFINETUNING ALL PARAMS\n\n\n")        
 
 
 
@@ -232,8 +242,18 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.mlp:
         print('training mlp final layer')
         model.fc = nn.Sequential(nn.Linear(model.fc.in_features, model.fc.in_features), model.fc)
-        model.fc[0].weight.data.normal_(mean=0.0, std=0.01)
+        # model.fc[0].weight.data.normal_(mean=0.0, std=0.01)
         model.fc[0].bias.data.zero_()
+
+    # random checkpointing
+    # savefile = os.path.join(args.checkpoint_fp, "resnet50-random-weights.tar")
+    # torch.save({
+    #     'epoch': 0,
+    #     'arch': args.arch,
+    #     'state_dict': model.state_dict(),
+    # }, savefile)
+    # import sys
+    # sys.exit(0)
 
     # load from pre-trained, before DistributedDataParallel constructor
     wandb_resume = args.resume
@@ -272,6 +292,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 # delete renamed or unused k
                 del state_dict[k]
             args.start_epoch = 0
+
             msg = model.load_state_dict(state_dict, strict=False)
             
 
@@ -318,10 +339,11 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # optimize only the linear classifier
     parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
-    if args.mlp:
-        assert len(parameters) == 4  # fc.{0,1}.weight, fc.{0,1}.bias
-    else:
-        assert len(parameters) == 2  # fc.weight, fc.bias
+    if not args.finetune:
+        if args.mlp:
+            assert len(parameters) == 4  # fc.{0,1}.weight, fc.{0,1}.bias
+        else:
+            assert len(parameters) == 2  # fc.weight, fc.bias
     optimizer = torch.optim.SGD(parameters, args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -407,7 +429,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for svhn")
-
 
     elif args.dataid == 'imagenet' and not args.reduced_imgnet:
         train_dataset = datasets.ImageFolder(
@@ -593,14 +614,17 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args, is_main_node, args.id[:5])
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
-        if is_main_node:
-            val_str = "val-{}"
-            if args.mlp:
-                val_str = "val-mlp-{}"
-            if args.loss_prefix:
-                val_str = args.loss_prefix + "-" + val_str
-            wandb.log({val_str.format(args.task): acc1})
+        if epoch % args.evaluate_interval == 0 or epoch >= (args.epochs-1):
+            acc1, acc5 = validate(val_loader, model, criterion, args)
+            if is_main_node:
+                val_str = "val-{}"
+                if args.mlp:
+                    val_str = "val-mlp-{}"
+                if args.loss_prefix:
+                    val_str = args.loss_prefix + "-" + val_str
+                acc1str = val_str.format(args.task)
+                acc5str = val_str.format(args.task) + "-top5"
+                wandb.log({acc1str: acc1, acc5str: acc5})
 
         # remember best acc@1 and save checkpoint
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.gpu == 0):
@@ -745,7 +769,7 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
 
-    return top1.avg
+    return top1.avg, top5.avg
 
 def rotate_images(images):
     nimages = images.shape[0]
