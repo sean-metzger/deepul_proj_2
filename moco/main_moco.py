@@ -5,6 +5,7 @@ import builtins
 import math
 import string
 import os
+import sys
 import random
 import shutil
 import time
@@ -32,7 +33,7 @@ import slm_utils.get_faa_transforms
 import moco.loader
 import moco.builder
 import numpy as np
-import data_loader
+# import data_loader
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -54,7 +55,7 @@ parser.add_argument('--name', type=str, default=default_id, help='wandb id/name'
 parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos', 'chexpert'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
@@ -99,6 +100,8 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
+parser.add_argument('--start-weights', default='', type=str, metavar='PATH',
+                    help='path to starting weights (default: none)')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
@@ -312,7 +315,21 @@ def main_worker(gpu, ngpus_per_node, args):
                                 weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
-    if args.resume:
+    if args.start_weights:
+        if os.path.isfile(args.start_weights):
+            print("=> loading start weights '{}'".format(args.resume))
+            if args.gpu is None:
+                checkpoint = torch.load(args.start_weights)
+            else:
+                # Map model to be loaded to specified single gpu.
+                loc = 'cuda:{}'.format(args.gpu)
+                checkpoint = torch.load(args.start_weights, map_location=loc)
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> loaded starting weights '{}'"
+                  .format(args.resume))
+        else:
+            raise Exception("No starting weights found at: {}".format(args.start_weights))
+    elif args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
@@ -331,6 +348,7 @@ def main_worker(gpu, ngpus_per_node, args):
                   .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
+            sys.exit(1)
 
     cudnn.benchmark = True
 
@@ -348,7 +366,14 @@ def main_worker(gpu, ngpus_per_node, args):
             # Use the crop they were using in Fast AutoAugment.
             random_resized_crop = transforms.RandomCrop(32, padding=4)
 
+    # elif args.dataid == "chexpert":
+    #     random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
+
     # Use the imagenet parameters.
+    elif args.dataid == "chexpert":
+        normalize = transforms.Normalize(mean=[0.5330, 0.5330, 0.5330],
+                                     std=[0.0349, 0.0349, 0.0349])
+        random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
     elif args.dataid == "imagenet" or args.dataid == "logos":
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
@@ -451,7 +476,10 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.ImageFolder(
             args.data,
             transformations)
-
+    elif args.dataid == "chexpert":
+        train_dataset = datasets.ImageFolder(
+            args.data,
+            transformations)
     elif args.dataid == "logos" and not args.reduced_imgnet: 
         train_dataset = data_loader.GetLoader(data_root=args.data,
         data_list='train_images_root.txt',

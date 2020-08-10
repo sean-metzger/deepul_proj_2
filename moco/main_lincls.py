@@ -4,6 +4,7 @@ import argparse
 import builtins
 import string
 import os
+import sys
 import random
 import shutil
 import time
@@ -25,7 +26,7 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from sklearn.model_selection import StratifiedShuffleSplit
 
-import data_loader
+# import data_loader
 
 import numpy as np
 
@@ -62,7 +63,7 @@ parser.add_argument('--checkpoint-interval', default=50, type=int,
 parser.add_argument('--checkpoint_fp', type=str, default='checkpoints/', help='where to store checkpoint')
 
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos', 'eurosat', 'resisc'))
 
 parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
@@ -128,7 +129,7 @@ parser.add_argument('--pretrained', default='', type=str,
 parser.add_argument('--mlp', action='store_true',
                     help='train a 2 layer mlp instead of a linear layer')
 parser.add_argument('--task', default='classify',
-                    help='which task to train', choices=("classify", "rotation"))
+                    help='which task to train', choices=("classify", "rotation", "jigsaw"))
 parser.add_argument('--loss-prefix', default="", type=str, 
                     help = "a prefix to add to the losses")
 
@@ -141,6 +142,9 @@ parser.add_argument('--fewshot', action='store_true',
                     help='is this fewshot')
 
 parser.add_argument('--reduced_imgnet', action='store_true',help="Use reduced imagenet (6k) for faa")
+parser.add_argument('--torchmodel', action='store_true',
+                    help='checkpoint is a torch model (not from main_moco.py)')
+
 
 best_acc1 = 0
 
@@ -213,9 +217,8 @@ def main_worker(gpu, ngpus_per_node, args):
     model = models.__dict__[args.arch]()
 
     # CIFAR 10 mod
-
     if args.dataid =="cifar10" or args.dataid =="svhn":
-    # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
+        # use the layer the SIMCLR authors used for cifar10 input conv, checked all padding/strides too.
         model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1,1), padding=(1,1), bias=False)
         model.maxpool = nn.Identity()
         n_output_classes = 10
@@ -223,17 +226,34 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataid == "logos": 
         n_output_classes = 2341
-
         print('in feats', model.fc.in_features)
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
         print(model.avgpool)
         model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
 
+    if args.dataid == "eurosat": 
+        n_output_classes = 10
+        print('in feats', model.fc.in_features)
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+        # TODO is this necessary???
+        # model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
 
+    if args.dataid == "resisc":
+        n_output_classes = 45
+        print('in feats', model.fc.in_features)
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+        # TODO is this necessary???
+        # model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
+        
 
+        
     if args.task == "rotation":
         print("Using 4 output classes for rotation")
         n_output_classes = 4
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+    elif args.task == "jigsaw":
+        print("Using 24 output classes for jigsaw")
+        n_output_classes = 24
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
 
     # freeze all layers but the last fc
@@ -275,6 +295,7 @@ def main_worker(gpu, ngpus_per_node, args):
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
             checkpoint = torch.load(args.pretrained, map_location="cpu")
+
             
             # rename moco pre-trained keys
             state_dict = checkpoint['state_dict']
@@ -302,8 +323,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 elif k.startswith('module.encoder_q'):
                     if k.find("fc") < 0:
                         state_dict[k[len("module.encoder_q."):]] = state_dict[k]
-                # delete renamed or unused k
-                del state_dict[k]
+                elif not args.torchmodel:
+                    # delete renamed or unused k if not directly loading a torch model
+                    del state_dict[k]
+
             args.start_epoch = 0
 
             msg = model.load_state_dict(state_dict, strict=False)
@@ -317,6 +340,7 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> loaded pre-trained model '{}'".format(args.pretrained))
         else:
             print("=> no checkpoint found at '{}'".format(args.pretrained))
+            sys.exit(1)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -394,6 +418,8 @@ def main_worker(gpu, ngpus_per_node, args):
         _CIFAR_MEAN, _CIFAR_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
         normalize = transforms.Normalize(mean=_CIFAR_MEAN, std=_CIFAR_STD)
     #  Original normalization
+    elif args.dataid == "resisc":
+        normalize = transforms.Normalize(mean=[0.368, 0.381, 0.3436], std=[0.2035, 0.1854, 0.1849])
     else:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
@@ -457,8 +483,28 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for imagenet")
 
-
-
+    elif args.dataid == 'resisc':
+        train_dataset = datasets.ImageFolder(
+            os.path.join(args.data, "train"),
+            transforms.Compose([
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+        ]))
+        
+    elif args.dataid == 'eurosat':
+        train_dataset = datasets.ImageFolder(
+            os.path.join(args.data, "train"),
+            transforms.Compose([
+                # TODO need to fix the crop transform
+                crop_transform,
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                # TODO need to change the normalize?
+                normalize,
+        ]))
+        
 
     elif args.dataid == 'logos' and not args.reduced_imgnet: 
         train_dataset = data_loader.GetLoader(data_root=args.data + '/train/',
@@ -567,6 +613,20 @@ def main_worker(gpu, ngpus_per_node, args):
         elif args.dataid == "svhn": 
             val_dataset = torchvision.datasets.SVHN(args.data, transform=val_transform,
                                                        download=True, split='test')
+        elif args.dataid == "eurosat":
+            valdir = os.path.join(args.data, 'val')
+            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+        elif args.dataid == "resisc":
+            valdir = os.path.join(args.data, 'val')
+            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
         else:
             if not args.reduced_imgnet and args.dataid == 'imagenet':
                 valdir = os.path.join(args.data, 'val')
@@ -723,13 +783,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
     batch_time = AverageMeter(args.loss_prefix + 'LinCls Time', ':6.3f')
     data_time = AverageMeter(args.loss_prefix + 'LinCls Data', ':6.3f')
     rot_losses = AverageMeter(args.loss_prefix + 'Rot Train Loss', ':.4e')
+    jigsaw_losses = AverageMeter(args.loss_prefix + 'Jigsaw Train Loss', ':.4e')
     losses = AverageMeter(args.loss_prefix + 'LinCls Loss', ':.4e')
     top1 = AverageMeter(args.loss_prefix + 'LinCls Acc@1', ':6.2f')
     top5 = AverageMeter(args.loss_prefix + 'LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5, rot_losses],
+        [batch_time, data_time, losses, top1, top5, rot_losses, jigsaw_losses],
         prefix="{} LinClass Epoch: [{}]".format(runid, epoch))
 
     """
@@ -754,6 +815,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             loss = criterion(output, target)
             rot_losses.update(loss.item(), images.size(0))
             acc1, acc5 = accuracy(output, target, topk=(1,4))
+        elif args.task=="jigsaw":
+            jigsaw_images, target = permute2x2(images)
+            output = model(jigsaw_images)
+            
+            loss = criterion(output, target)
+            jigsaw_losses.update(loss.item(), images.size(0))
+            acc1, acc5 = accuracy(output, target, topk=(1,5))
+
+            if i == 0:
+                eximg0 = wandb.Image(jigsaw_images[0].permute(1,2,0).cpu().numpy())
+                eximg1 = wandb.Image(jigsaw_images[0].permute(1,2,0).cpu().numpy())
+                wandb.log({"example jigsaw image": [eximg0, eximg1]})
+            
         else:
             target = target.cuda(args.gpu, non_blocking=True)
 
@@ -784,12 +858,13 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Val Loss', ':.4e')
     rot_losses = AverageMeter('Rot Val Loss', ':.4e')
+    jigsaw_losses = AverageMeter('Jigsaw Val Loss', ':.4e')
     top1 = AverageMeter('Val Acc@1', ':6.2f')
     top5 = AverageMeter('Val Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(val_loader),
-        [batch_time, losses, top1, top5, rot_losses],
+        [batch_time, losses, top1, top5, rot_losses, jigsaw_losses],
         prefix='Test: ')
 
     # switch to evaluate mode
@@ -808,6 +883,12 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 loss = criterion(output, target)
                 rot_losses.update(loss.item(), images.size(0))
                 acc1, acc5 = accuracy(output, target, topk=(1,4))
+            elif args.task=="jigsaw":
+                jigsaw_images, target = permute2x2(images)
+                output = model(jigsaw_images)
+                loss = criterion(output, target)
+                jigsaw_losses.update(loss.item(), images.size(0))
+                acc1, acc5 = accuracy(output, target, topk=(1,5))
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
@@ -853,6 +934,50 @@ def rotate_images(images):
 
     return rotated_images, rot_classes
 
+perm_map = {
+    0: torch.LongTensor([0, 1, 2, 3]),
+    1: torch.LongTensor([0, 1, 3, 2]),
+    2: torch.LongTensor([0, 2, 1, 3]),
+    3: torch.LongTensor([0, 2, 3, 1]),
+    4: torch.LongTensor([0, 3, 2, 1]),
+    5: torch.LongTensor([0, 3, 1, 2]),    
+    6: torch.LongTensor([1, 0, 2, 3]),
+    7: torch.LongTensor([1, 0, 3, 2]),
+    8: torch.LongTensor([1, 2, 0, 3]),
+    9: torch.LongTensor([1, 2, 3, 0]),
+    10: torch.LongTensor([1, 3, 2, 0]),
+    11: torch.LongTensor([1, 3, 0, 2]),    
+    12: torch.LongTensor([2, 1, 0, 3]),
+    13: torch.LongTensor([2, 1, 3, 0]),
+    14: torch.LongTensor([2, 0, 1, 3]),
+    15: torch.LongTensor([2, 0, 3, 1]),
+    16: torch.LongTensor([2, 3, 0, 1]),
+    17: torch.LongTensor([2, 3, 1, 0]),    
+    18: torch.LongTensor([3, 1, 2, 0]),
+    19: torch.LongTensor([3, 1, 0, 2]),
+    20: torch.LongTensor([3, 2, 1, 0]),
+    21: torch.LongTensor([3, 2, 0, 1]),
+    22: torch.LongTensor([3, 0, 2, 1]),
+    23: torch.LongTensor([3, 0, 1, 2])
+}
+def permute2x2(images):
+    """
+    Splits the images into 2x2 = 4 pieces and randomly permutes the pieces.
+    """
+    half_size = int(images.shape[-1] / 2)
+    perm_inds = [(0, 0), (half_size, 0), (half_size, half_size), (0, half_size)]
+    
+    p_images = torch.FloatTensor(images.size()).cuda()
+    perms = torch.LongTensor(images.size()[0], 4)
+    targets = torch.randint(24, [images.size()[0]])
+    for i in range(images.size()[0]):
+        p = perm_map[targets[i].item()] # torch.randperm(4)
+        for j in range(4):
+            sr, sc = perm_inds[j]
+            tr, tc = perm_inds[p[j]]
+            p_images[i, :, tr:tr+half_size, tc:tc+half_size] = images[i, :, sr:sr+half_size, sc:sc+half_size]
+        perms[i,:] = p
+    return(p_images, targets.cuda())
 
 def sanity_check(state_dict, pretrained_weights):
     """
@@ -946,6 +1071,8 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+
+    
 
 if __name__ == '__main__':
 
