@@ -11,6 +11,9 @@ import time
 import warnings
 import math
 
+from skimage.color import lab2rgb, rgb2lab, rgb2gray
+from skimage import io
+
 import torchvision
 import torch
 import torch.nn as nn
@@ -129,7 +132,7 @@ parser.add_argument('--pretrained', default='', type=str,
 parser.add_argument('--mlp', action='store_true',
                     help='train a 2 layer mlp instead of a linear layer')
 parser.add_argument('--task', default='classify',
-                    help='which task to train', choices=("classify", "rotation", "jigsaw"))
+                    help='which task to train', choices=("classify", "rotation", "jigsaw", "color"))
 parser.add_argument('--loss-prefix', default="", type=str, 
                     help = "a prefix to add to the losses")
 
@@ -212,6 +215,14 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+
+    if args.dataid == "cifar10" or args.dataid=="svhn":
+        crop_size = 28
+        orig_size = 32
+    else:
+        crop_size = 224
+        orig_size = 256
+
     # create model
     print("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch]()
@@ -244,7 +255,7 @@ def main_worker(gpu, ngpus_per_node, args):
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
         # TODO is this necessary???
         # model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
-        
+
 
         
     if args.task == "rotation":
@@ -255,6 +266,10 @@ def main_worker(gpu, ngpus_per_node, args):
         print("Using 24 output classes for jigsaw")
         n_output_classes = 24
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+    elif args.task == "color":
+        n_output_classes = crop_size * crop_size * 2
+        model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
+        
 
     # freeze all layers but the last fc
     if not args.finetune:
@@ -335,6 +350,9 @@ def main_worker(gpu, ngpus_per_node, args):
             if args.mlp:
                 assert set(msg.missing_keys) == {"fc.0.weight", "fc.0.bias", "fc.1.weight", "fc.1.bias"}
             else:
+                if set(msg.missing_keys) != {"fc.weight", "fc.bias"}:
+                    print("Missing the following keys")
+                    print(msg.missing_keys)
                 assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
             print("=> loaded pre-trained model '{}'".format(args.pretrained))
@@ -372,7 +390,10 @@ def main_worker(gpu, ngpus_per_node, args):
             model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    if args.task == "color":
+        criterion = nn.MSELoss().cuda(args.gpu)
+    else:
+        criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
     # optimize only the linear classifier
     parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
@@ -426,29 +447,35 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Readded some data augmentations for training this part.
 
-    if args.dataid == "cifar10" or args.dataid=="svhn":
-        crop_size = 28
-        orig_size = 32
-    else:
-        crop_size = 224
-        orig_size = 256
-
     if not args.randomcrop:
         crop_transform = transforms.RandomResizedCrop(crop_size)
     else:
         crop_transform = transforms.RandomCrop(crop_size)
 
 
-    print(args.data)
+    def grey_image_transform(img):
+        img_original = np.asarray(img)
+        img_lab = rgb2lab(img_original)
+        img_lab = (img_lab + 128) / 255
+        img_ab = img_lab[:, :, 1:3]
+        img_ab = torch.from_numpy(img_ab.transpose((2, 0, 1))).float()
+        img_l = torch.from_numpy(rgb2gray(img_original)).unsqueeze(0).float().repeat(1,3,1,1)
+        return (img_l,img_ab)
+
+    standard_transforms = transforms.Compose([crop_transform,
+                                              transforms.RandomHorizontalFlip(),
+                                              transforms.ToTensor(),
+                                              normalize])
+
+    if args.task == "color":
+        standard_transforms = transforms.Compose([crop_transform,
+                            transforms.RandomHorizontalFlip(),
+                            grey_image_transform,
+        ])
 
     if args.dataid == "cifar10":
-        train_dataset = torchvision.datasets.CIFAR10(args.data,
-                                                     transform= transforms.Compose([
-                                                         crop_transform,
-                                                         transforms.RandomHorizontalFlip(),
-                                                         transforms.ToTensor(),
-                                                         normalize,
-                                                     ]), download=False)
+        train_dataset = torchvision.datasets.CIFAR10(args.data, transform=standard_transforms, download=False)            
+            
         if args.percent < 100:
             train_size = math.floor(50000 * (args.percent / 100.0))
             print("Using {} percent of cifar training data: {} samples".format(args.percent, train_size))
@@ -460,50 +487,26 @@ def main_worker(gpu, ngpus_per_node, args):
             train_dataset.targets = targets
 
     elif args.dataid == "svhn": 
-        train_dataset = torchvision.datasets.SVHN(args.data,
-                                                     transform= transforms.Compose([
-                                                         crop_transform,
-                                                         transforms.RandomHorizontalFlip(),
-                                                         transforms.ToTensor(),
-                                                         normalize,
-                                                     ]), download=False)
-
+        train_dataset = torchvision.datasets.SVHN(args.data, transform=standard_transforms, download=False)
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for svhn")
 
     elif args.dataid == 'imagenet' and not args.reduced_imgnet:
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
-            transforms.Compose([
-                crop_transform,
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-        ]))
+            standard_transforms)
         if args.percent < 100:
             raise Exception("Percent setting not yet implemented for imagenet")
 
     elif args.dataid == 'resisc':
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
-            transforms.Compose([
-                crop_transform,
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-        ]))
+            standard_transforms)
         
     elif args.dataid == 'eurosat':
         train_dataset = datasets.ImageFolder(
             os.path.join(args.data, "train"),
-            transforms.Compose([
-                # TODO need to fix the crop transform
-                crop_transform,
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                # TODO need to change the normalize?
-                normalize,
-        ]))
+            standard_transforms)
         
 
     elif args.dataid == 'logos' and not args.reduced_imgnet: 
@@ -520,7 +523,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
     elif (args.dataid == "imagenet" or args.dataid =="logos") and args.reduced_imgnet: 
 
-        import numpy as np
         idx120 = [16, 23, 52, 57, 76, 93, 95, 96, 99, 121, 122, 128, 148, 172, 181, 189, 202, 210, 232, 238, 257, 258, 259, 277, 283, 289, 295, 304, 307, 318, 322, 331, 337, 338, 345, 350, 361, 375, 376, 381, 388, 399, 401, 408, 424, 431, 432, 440, 447, 462, 464, 472, 483, 497, 506, 512, 530, 541, 553, 554, 557, 564, 570, 584, 612, 614, 619, 626, 631, 632, 650, 657, 658, 660, 674, 675, 680, 682, 691, 695, 699, 711, 734, 736, 741, 754, 757, 764, 769, 770, 780, 781, 787, 797, 799, 811, 822, 829, 830, 835, 837, 842, 843, 845, 873, 883, 897, 900, 902, 905, 913, 920, 925, 937, 938, 940, 941, 944, 949, 959]
         
         if args.dataid == "imagenet":
@@ -598,13 +600,22 @@ def main_worker(gpu, ngpus_per_node, args):
         print('len valid', len(valid_idx))
         print('first val_idx', valid_idx[:10])
 
-
-    val_transform = transforms.Compose([
+    if args.task != "color":
+        val_transform = transforms.Compose([
             transforms.Resize(orig_size),
             transforms.CenterCrop(crop_size),
             transforms.ToTensor(),
             normalize,
-            ])
+        ])
+    else:
+        val_transform = transforms.Compose([
+            transforms.Resize(orig_size),
+            transforms.CenterCrop(crop_size),
+            grey_image_transform,
+        ])
+        
+    
+
 
     if args.kfold == None:
         if args.dataid == "cifar10":
@@ -621,32 +632,17 @@ def main_worker(gpu, ngpus_per_node, args):
                 ]))
         elif args.dataid == "resisc":
             valdir = os.path.join(args.data, 'val')
-            val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ]))
+            val_dataset = datasets.ImageFolder(valdir, val_transform)
         else:
             if not args.reduced_imgnet and args.dataid == 'imagenet':
                 valdir = os.path.join(args.data, 'val')
                 print('loaded full validation set')
-                val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-                    transforms.Resize(256),
-                    transforms.CenterCrop(224),
-                    transforms.ToTensor(),
-                    normalize,
-                ]))
+                val_dataset = datasets.ImageFolder(valdir, val_transform)
 
-            if args.dataid == 'logos': 
+            # if args.dataid == 'logos': 
 
-                print('using logos VAL')
-                val_dataset = data_loader.GetLoader(data_root=args.data + '/test/', 
-                data_list='test_images_root.txt', transform=transforms.Compose([
-                transforms.Resize(orig_size),
-                transforms.CenterCrop(crop_size),
-                transforms.ToTensor(),
-                normalize]))
+            #     print('using logos VAL')
+            #     val_dataset = data_loader.GetLoader(data_root=args.data + '/test/', data_list='test_images_root.txt', val_transform)
 
 
     else: 
@@ -665,7 +661,6 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.manual_seed(1337)
         print('before: K FOLD', args.kfold, len(train_dataset))
         lengths = [len(train_dataset)//5]*5
-        import numpy as np
         lengths[-1] = int(lengths[-1] + (len(train_dataset)-np.sum(lengths)))
         print(lengths)
         folds = torch.utils.data.random_split(train_dataset, lengths)
@@ -721,7 +716,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #         num_workers=args.workers, pin_memory=True, sampler=valid_sampler)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args, is_main_node)
+        validate(val_loader, model, criterion, args, is_main_node, epoch)
         return
     print("Doing task: {}".format(args.task))
     for epoch in range(args.start_epoch, args.epochs):
@@ -736,7 +731,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # evaluate on validation set
         if epoch % args.evaluate_interval == 0 or epoch >= (args.epochs-1):
-            acc1, acc5 = validate(val_loader, model, criterion, args)
+            acc1, acc5 = validate(val_loader, model, criterion, args, is_main_node, epoch)
             if is_main_node:
                 val_str = "val-{}"
                 if args.mlp:
@@ -784,13 +779,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
     data_time = AverageMeter(args.loss_prefix + 'LinCls Data', ':6.3f')
     rot_losses = AverageMeter(args.loss_prefix + 'Rot Train Loss', ':.4e')
     jigsaw_losses = AverageMeter(args.loss_prefix + 'Jigsaw Train Loss', ':.4e')
+    color_losses = AverageMeter(args.loss_prefix + 'Color Train Loss', ':.4e')
     losses = AverageMeter(args.loss_prefix + 'LinCls Loss', ':.4e')
     top1 = AverageMeter(args.loss_prefix + 'LinCls Acc@1', ':6.2f')
     top5 = AverageMeter(args.loss_prefix + 'LinCls Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5, rot_losses, jigsaw_losses],
+        [batch_time, data_time, losses, top1, top5, rot_losses, jigsaw_losses, color_losses],
         prefix="{} LinClass Epoch: [{}]".format(runid, epoch))
 
     """
@@ -806,6 +802,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
+        if args.task == "color":
+            target = images[1].view(images[1].shape[0], -1)
+            images = images[0].squeeze()
+            if i ==0:
+                eximg0 = wandb.Image(images[0].permute(1,2,0).cpu().numpy())
+                wandb.log({"example grey images": [eximg0]}) 
+            
         if args.gpu is not None:
             images = images.cuda(args.gpu, non_blocking=True)
 
@@ -827,15 +830,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
                 eximg0 = wandb.Image(jigsaw_images[0].permute(1,2,0).cpu().numpy())
                 eximg1 = wandb.Image(jigsaw_images[0].permute(1,2,0).cpu().numpy())
                 wandb.log({"example jigsaw image": [eximg0, eximg1]})
-            
         else:
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
             output = model(images)
             loss = criterion(output, target)
-            losses.update(loss.item(), images.size(0))
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            if args.task=="color":
+                color_losses.update(loss.item(), images.size(0))
+                acc1 = [0]
+                acc5 = [0]
+            else:
+                losses.update(loss.item(), images.size(0))
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
         # measure accuracy and record loss
         
         top1.update(acc1[0], images.size(0))
@@ -854,17 +861,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             progress.display(i)
 
 
-def validate(val_loader, model, criterion, args, is_main_node=False):
+def validate(val_loader, model, criterion, args, is_main_node, epoch):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Val Loss', ':.4e')
     rot_losses = AverageMeter('Rot Val Loss', ':.4e')
     jigsaw_losses = AverageMeter('Jigsaw Val Loss', ':.4e')
+    color_losses = AverageMeter('Color Val Loss', ':.4e')
     top1 = AverageMeter('Val Acc@1', ':6.2f')
     top5 = AverageMeter('Val Acc@5', ':6.2f')
     progress = ProgressMeter(
         is_main_node,
         len(val_loader),
-        [batch_time, losses, top1, top5, rot_losses, jigsaw_losses],
+        [batch_time, losses, top1, top5, rot_losses, jigsaw_losses, color_losses],
         prefix='Test: ')
 
     # switch to evaluate mode
@@ -873,6 +881,10 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
+            if args.task == "color":
+                target = images[1].view(images[1].shape[0], -1)
+                images = images[0].squeeze()
+            
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
 
@@ -893,8 +905,17 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
                 loss = criterion(output, target)
-                losses.update(loss.item(), images.size(0))
-                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                if args.task=="color":
+                    if i == 0 and epoch % 10 == 0:
+                        ri = torch.randint(len(images), [1]).item()
+                        to_rgb_wandb(images[ri], output[ri].view(2, images[ri].shape[1], images[ri].shape[2]),
+                                     target[ri].view(2, images[ri].shape[1], images[ri].shape[2]), wandb)
+                    color_losses.update(loss.item(), images.size(0))
+                    acc1 = [0]
+                    acc5 = [0]
+                else:
+                    losses.update(loss.item(), images.size(0))
+                    acc1, acc5 = accuracy(output, target, topk=(1, 5))
             # measure accuracy and record loss
             
             top1.update(acc1[0], images.size(0))
@@ -911,6 +932,9 @@ def validate(val_loader, model, criterion, args, is_main_node=False):
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
 
+    if args.task == "color":
+        return color_losses.avg, -1
+    
     return top1.avg, top5.avg
 
 def rotate_images(images):
@@ -1071,11 +1095,47 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+class GrayscaleImageFolder(datasets.ImageFolder):
+  '''Custom images folder, which converts images to grayscale before loading'''
+  def __getitem__(self, index):
+    path, target = self.imgs[index]
+    img = self.loader(path)
+    if self.transform is not None:
+      img_original = self.transform(img)
+      img_original = np.asarray(img_original)
+      img_lab = rgb2lab(img_original)
+      img_lab = (img_lab + 128) / 255
+      img_ab = img_lab[:, :, 1:3]
+      img_ab = torch.from_numpy(img_ab.transpose((2, 0, 1))).float()
+      img_original = rgb2gray(img_original)
+      img_original = torch.from_numpy(img_original).unsqueeze(0).float()
+    if self.target_transform is not None:
+      target = self.target_transform(target)
+    return img_original, img_ab, target
 
+def to_rgb_wandb(grayscale_input, ab_input, ab_target, wandb):
+    grayscale_input = grayscale_input[0,:,:].unsqueeze(0).cpu()
+    ab_input = ab_input.cpu()
+    ab_target = ab_target.cpu()
+    color_image = torch.cat((grayscale_input, ab_input), 0).numpy() # combine channels
+    color_image = color_image.transpose((1, 2, 0))  # rescale for matplotlib
+    color_image[:, :, 0:1] = color_image[:, :, 0:1] * 100
+    color_image[:, :, 1:3] = color_image[:, :, 1:3] * 255 - 128   
+    color_image = lab2rgb(color_image.astype(np.float64))
+
+    target_color_image = torch.cat((grayscale_input, ab_target), 0).numpy() # combine channels
+    target_color_image = target_color_image.transpose((1, 2, 0))  # rescale for matplotlib
+    target_color_image[:, :, 0:1] = target_color_image[:, :, 0:1] * 100
+    target_color_image[:, :, 1:3] = target_color_image[:, :, 1:3] * 255 - 128   
+    target_color_image = lab2rgb(target_color_image.astype(np.float64))
     
-
+    
+    eximg0 = wandb.Image(grayscale_input.numpy())
+    eximg1 = wandb.Image(color_image)
+    eximg2 = wandb.Image(target_color_image)
+    wandb.log({"val colorized image": [eximg0, eximg1, eximg2]})
+    
 if __name__ == '__main__':
-
     start = time.time()
     main()
 
