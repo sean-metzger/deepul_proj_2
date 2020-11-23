@@ -7,7 +7,6 @@ import string
 import os
 import sys
 import random
-import shutil
 import time
 import warnings
 
@@ -33,7 +32,6 @@ import slm_utils.get_faa_transforms
 import moco.loader
 import moco.builder
 import numpy as np
-# import data_loader
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -55,7 +53,7 @@ parser.add_argument('--name', type=str, default=default_id, help='wandb id/name'
 parser.add_argument('--id', type=str, default=default_id, help='wandb id/name')
 parser.add_argument('--wandbproj', type=str, default='autoself', help='wandb project name')
 
-parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos', 'chexpert'))
+parser.add_argument('--dataid', help='id of dataset', default="cifar10", choices=('cifar10', 'imagenet', 'svhn', 'logos', 'chexpert', 'resisc'))
 parser.add_argument('--checkpoint-interval', default=100, type=int,
                     help='how often to checkpoint')
 parser.add_argument('--image-log-interval', default=10, type=int,
@@ -343,6 +341,7 @@ def main_worker(gpu, ngpus_per_node, args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             args.id=checkpoint['id']
             args.name=checkpoint['name']
+            
             CHECKPOINT_ID = checkpoint['name']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
@@ -378,7 +377,9 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
         random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
-
+    elif args.dataid == "resisc":
+        normalize = transforms.Normalize(mean=[0.368, 0.381, 0.3436], std=[0.2035, 0.1854, 0.1849])
+        random_resized_crop = transforms.RandomResizedCrop(224, scale=(0.2, 1.))
 
         
     if args.aug_plus and (args.faa_aug or 
@@ -477,6 +478,10 @@ def main_worker(gpu, ngpus_per_node, args):
             args.data,
             transformations)
     elif args.dataid == "chexpert":
+        train_dataset = datasets.ImageFolder(
+            args.data,
+            transformations)
+    elif args.dataid == "resisc":
         train_dataset = datasets.ImageFolder(
             args.data,
             transformations)

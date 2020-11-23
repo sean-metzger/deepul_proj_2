@@ -13,6 +13,7 @@ import math
 
 from skimage.color import lab2rgb, rgb2lab, rgb2gray
 from skimage import io
+import sklearn.neighbors as knn
 
 import torchvision
 import torch
@@ -267,7 +268,7 @@ def main_worker(gpu, ngpus_per_node, args):
         n_output_classes = 24
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
     elif args.task == "color":
-        n_output_classes = crop_size * crop_size * 2
+        n_output_classes = crop_size * crop_size * 313  # from colorful image colorization paper
         model.fc = torch.nn.Linear(model.fc.in_features, n_output_classes)
         
 
@@ -390,10 +391,10 @@ def main_worker(gpu, ngpus_per_node, args):
             model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    if args.task == "color":
-        criterion = nn.MSELoss().cuda(args.gpu)
-    else:
-        criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    # if args.task == "color":
+    #     criterion = nn.MSELoss().cuda(args.gpu)
+    # else:
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
     # optimize only the linear classifier
     parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
@@ -719,6 +720,10 @@ def main_worker(gpu, ngpus_per_node, args):
         validate(val_loader, model, criterion, args, is_main_node, epoch)
         return
     print("Doing task: {}".format(args.task))
+    if args.task == 'color':
+        qencoder = NNEncode()
+    else:
+        qencoder = None
     for epoch in range(args.start_epoch, args.epochs):
 
         print(epoch)
@@ -727,11 +732,11 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args, is_main_node, args.id[:5])
+        train(train_loader, model, criterion, optimizer, epoch, args, is_main_node, args.id[:5], qencoder=qencoder)
 
         # evaluate on validation set
         if epoch % args.evaluate_interval == 0 or epoch >= (args.epochs-1):
-            acc1, acc5 = validate(val_loader, model, criterion, args, is_main_node, epoch)
+            acc1, acc5 = validate(val_loader, model, criterion, args, is_main_node, epoch, qencoder=qencoder)
             if is_main_node:
                 val_str = "val-{}"
                 if args.mlp:
@@ -747,10 +752,7 @@ def main_worker(gpu, ngpus_per_node, args):
             is_best = acc1 > best_acc1
             best_acc1 = max(acc1, best_acc1)
             if is_best:
-                if args.task == "rotation": 
-                    savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best_rotation.tar".format(args.id[:5]))
-                else: 
-                    savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best.tar".format(args.id[:5]))
+                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_best_{}.tar".format(args.id[:5], args.task))
                 torch.save({
                     'epoch': epoch + 1,
                     'arch': args.arch,
@@ -761,20 +763,21 @@ def main_worker(gpu, ngpus_per_node, args):
                 wandb.save(savefile)
 
             # save the current epoch
-            if args.task == "rotation": 
-                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_rotation_current.tar".format(args.id[:5]))
-            else: 
-                savefile = os.path.join(args.checkpoint_fp, "{}_lincls_current.tar".format(args.id[:5]))
-            torch.save({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),
-            }, savefile)
+            # if args.task == "rotation": 
+            #     savefile = os.path.join(args.checkpoint_fp, "{}_lincls_rotation_current.tar".format(args.id[:5]))
+            # else: 
+            #     savefile = os.path.join(args.checkpoint_fp, "{}_lincls_current.tar".format(args.id[:5]))
+            # torch.save({
+            #     'epoch': epoch + 1,
+            #     'arch': args.arch,
+            #     'state_dict': model.state_dict(),
+            #     'best_acc1': best_acc1,
+            #     'optimizer' : optimizer.state_dict(),
+            # }, savefile)
             
 
-def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid=""):
+
+def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=False, runid="", qencoder=None):
     batch_time = AverageMeter(args.loss_prefix + 'LinCls Time', ':6.3f')
     data_time = AverageMeter(args.loss_prefix + 'LinCls Data', ':6.3f')
     rot_losses = AverageMeter(args.loss_prefix + 'Rot Train Loss', ':.4e')
@@ -803,7 +806,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
         # measure data loading time
         data_time.update(time.time() - end)
         if args.task == "color":
-            target = images[1].view(images[1].shape[0], -1)
+            # images returns the l,ab in a len 2 array
+            ab_channels = images[1]
+            target = ab_channels.permute([0,2,3,1]).contiguous().view(-1, 2) # -1 by A B channels
+            target = torch.max(torch.tensor(qencoder.encode_points_mtx_nd(target)), 1)[1]
             images = images[0].squeeze()
             if i ==0:
                 eximg0 = wandb.Image(images[0].permute(1,2,0).cpu().numpy())
@@ -835,16 +841,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
 
             # compute output
             output = model(images)
-            loss = criterion(output, target)
+
             if args.task=="color":
+                output = output.view(-1, 313)
+                loss = criterion(output, target)
+                # TODO we need to make sure these align
                 color_losses.update(loss.item(), images.size(0))
-                acc1 = [0]
-                acc5 = [0]
             else:
+                loss = criterion(output, target)
                 losses.update(loss.item(), images.size(0))
-                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            acc1, acc5 = accuracy(output, target, topk=(1,5))
+                
         # measure accuracy and record loss
-        
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
@@ -861,7 +869,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, is_main_node=F
             progress.display(i)
 
 
-def validate(val_loader, model, criterion, args, is_main_node, epoch):
+def validate(val_loader, model, criterion, args, is_main_node, epoch, qencoder=None):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Val Loss', ':.4e')
     rot_losses = AverageMeter('Rot Val Loss', ':.4e')
@@ -882,7 +890,9 @@ def validate(val_loader, model, criterion, args, is_main_node, epoch):
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
             if args.task == "color":
-                target = images[1].view(images[1].shape[0], -1)
+                ab_channels = images[1]
+                target = ab_channels.permute([0,2,3,1]).contiguous().view(-1, 2) # -1 by A B channels
+                target = torch.max(torch.tensor(qencoder.encode_points_mtx_nd(target)), 1)[1]
                 images = images[0].squeeze()
             
             if args.gpu is not None:
@@ -904,18 +914,26 @@ def validate(val_loader, model, criterion, args, is_main_node, epoch):
             else:
                 target = target.cuda(args.gpu, non_blocking=True)
                 output = model(images)
-                loss = criterion(output, target)
                 if args.task=="color":
-                    if i == 0 and epoch % 10 == 0:
+                    output = output.view(-1, 313)
+                    loss = criterion(output, target)
+
+                    if i == 0:
                         ri = torch.randint(len(images), [1]).item()
-                        to_rgb_wandb(images[ri], output[ri].view(2, images[ri].shape[1], images[ri].shape[2]),
-                                     target[ri].view(2, images[ri].shape[1], images[ri].shape[2]), wandb)
+                        ab_output = torch.tensor(qencoder.cc[output.cpu().argmax(1)]).view(images.shape[0], images.shape[-2], images.shape[-1], 2)
+                        ab_target = torch.tensor(qencoder.cc[target.cpu()]).view(images.shape[0], images.shape[-2], images.shape[-1], 2)
+                        # convert output back to ab space
+                        
+                        to_rgb_wandb(images[ri],
+                                     ab_output[ri].permute([2, 0, 1]),
+                                     ab_target[ri].permute([2, 0, 1]),
+                                     wandb)
                     color_losses.update(loss.item(), images.size(0))
-                    acc1 = [0]
-                    acc5 = [0]
                 else:
+                    loss = criterion(output, target)
                     losses.update(loss.item(), images.size(0))
-                    acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
             # measure accuracy and record loss
             
             top1.update(acc1[0], images.size(0))
@@ -1134,6 +1152,121 @@ def to_rgb_wandb(grayscale_input, ab_input, ab_target, wandb):
     eximg1 = wandb.Image(color_image)
     eximg2 = wandb.Image(target_color_image)
     wandb.log({"val colorized image": [eximg0, eximg1, eximg2]})
+
+
+class NNEncode():
+    ''' Encode points using NN search and Gaussian kernel 
+    From https://github.com/richzhang/colorization/blob/caffe/colorization/resources/caffe_traininglayers.py
+    '''
+    def __init__(self,NN=10,sigma=5,km_filepath='resources/pts_in_hull.npy',cc=-1):
+        self.cc = (np.load(km_filepath) + 128)/255.0
+        self.K = self.cc.shape[0]
+        self.NN = int(NN)
+        self.sigma = sigma
+        self.nbrs = knn.NearestNeighbors(n_neighbors=NN, algorithm='ball_tree').fit(self.cc)
+
+        self.alreadyUsed = False
+
+    def encode_points_mtx_nd(self,pts_nd,axis=1,returnSparse=False,sameBlock=True):
+        # (dists,inds) = self.nbrs.kneighbors(pts_nd)
+        # end_points = torch.tensor([self.cc[i][0] for i in inds])
+        # return end_points
+        pts_flt = flatten_nd_array(pts_nd,axis=axis)
+        P = pts_flt.shape[0]
+        if(sameBlock and self.alreadyUsed and pts_nd.shape[0] == self.pts_enc_flt.shape[0]):
+            self.pts_enc_flt[...] = 0 # already pre-allocated
+        else:
+            self.alreadyUsed = True
+            self.pts_enc_flt = np.zeros((P,self.K))
+            self.p_inds = np.arange(0,P,dtype='int')[:,na()]
+
+        P = pts_flt.shape[0]
+
+        (dists,inds) = self.nbrs.kneighbors(pts_flt)
+
+        wts = np.exp(-dists**2/(2*self.sigma**2))
+        wts = wts/np.sum(wts,axis=1)[:,na()]
+
+        self.pts_enc_flt[self.p_inds,inds] = wts
+        pts_enc_nd = unflatten_2d_array(self.pts_enc_flt,pts_nd,axis=axis)
+
+        return pts_enc_nd
+
+    def decode_points_mtx_nd(self,pts_enc_nd,axis=1):
+        pts_enc_flt = flatten_nd_array(pts_enc_nd,axis=axis)
+        pts_dec_flt = np.dot(pts_enc_flt,self.cc)
+        pts_dec_nd = unflatten_2d_array(pts_dec_flt,pts_enc_nd,axis=axis)
+        return pts_dec_nd
+
+    def decode_1hot_mtx_nd(self,pts_enc_nd,axis=1,returnEncode=False):
+        pts_1hot_nd = nd_argmax_1hot(pts_enc_nd,axis=axis)
+        pts_dec_nd = self.decode_points_mtx_nd(pts_1hot_nd,axis=axis)
+        if(returnEncode):
+            return (pts_dec_nd,pts_1hot_nd)
+        else:
+            return pts_dec_nd
+
+# *****************************
+# ***** Utility functions *****
+# *****************************
+def check_value(inds, val):
+    ''' Check to see if an array is a single element equaling a particular value
+    for pre-processing inputs in a function '''
+    if(np.array(inds).size==1):
+        if(inds==val):
+            return True
+    return False
+
+def na(): # shorthand for new axis
+    return np.newaxis
+
+def flatten_nd_array(pts_nd,axis=1):
+    ''' Flatten an nd array into a 2d array with a certain axis
+    INPUTS
+        pts_nd       N0xN1x...xNd array
+        axis         integer
+    OUTPUTS
+        pts_flt     prod(N \ N_axis) x N_axis array     '''
+    NDIM = pts_nd.ndim
+    SHP = np.array(pts_nd.shape)
+    nax = np.setdiff1d(np.arange(0,NDIM),np.array((axis))) # non axis indices
+    NPTS = np.prod(SHP[nax])
+    axorder = np.concatenate((nax,np.array(axis).flatten()),axis=0)
+    pts_flt = pts_nd.transpose(*axorder)
+    pts_flt = pts_flt.reshape(NPTS,SHP[axis])
+    return pts_flt
+
+def unflatten_2d_array(pts_flt,pts_nd,axis=1,squeeze=False):
+    ''' Unflatten a 2d array with a certain axis
+    INPUTS
+        pts_flt     prod(N \ N_axis) x M array
+        pts_nd      N0xN1x...xNd array
+        axis        integer
+        squeeze     bool     if true, M=1, squeeze it out
+    OUTPUTS
+        pts_out     N0xN1x...xNd array        '''
+    NDIM = pts_nd.ndim
+    SHP = np.array(pts_nd.shape)
+    nax = np.setdiff1d(np.arange(0,NDIM),np.array((axis))) # non axis indices
+    NPTS = np.prod(SHP[nax])
+
+    if(squeeze):
+        axorder = nax
+        axorder_rev = np.argsort(axorder)
+        M = pts_flt.shape[1]
+        NEW_SHP = SHP[nax].tolist()
+        pts_out = pts_flt.reshape(NEW_SHP)
+        pts_out = pts_out.transpose(axorder_rev)
+    else:
+        axorder = np.concatenate((nax,np.array(axis).flatten()),axis=0)
+        axorder_rev = np.argsort(axorder)
+        M = pts_flt.shape[1]
+        NEW_SHP = SHP[nax].tolist()
+        NEW_SHP.append(M)
+        pts_out = pts_flt.reshape(NEW_SHP)
+        pts_out = pts_out.transpose(axorder_rev)
+
+    return pts_out
     
 if __name__ == '__main__':
     start = time.time()
@@ -1141,3 +1274,5 @@ if __name__ == '__main__':
 
     elapsed = time.time()-start
     print('elapsed', elapsed)
+
+
